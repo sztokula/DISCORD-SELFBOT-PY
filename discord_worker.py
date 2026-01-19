@@ -10,16 +10,57 @@ class DiscordWorker:
         self.is_running = False
         self.max_retries = 3
         self.backoff_factor = 1.5
+        self.default_tags = ["#promo", "#info", "#discord", "#community", "#support"]
+        self.default_emojis = ["🔥", "✨", "✅", "🚀", "🎉", "💬", "🧩", "🌟"]
 
     def parse_spintax(self, text):
         """Zamienia {opcja1|opcja2} na losową opcję."""
         while True:
-            match = re.search(r'\{([^{}]*)\}', text)
+            match = re.search(r"\{([^{}]*)\}", text)
             if not match:
                 break
-            options = match.group(1).split('|')
-            text = text.replace(match.group(0), random.choice(options), 1)
+            options = [option for option in match.group(1).split("|") if option]
+            text = text.replace(match.group(0), random.choice(options) if options else "", 1)
         return text
+
+    def _choose_custom_list(self, raw_value, fallback):
+        if not raw_value:
+            return fallback
+        items = [item.strip() for item in raw_value.split(",") if item.strip()]
+        return items if items else fallback
+
+    def _replace_random_tokens(self, text):
+        def replace_tag(match):
+            custom = match.group(1)
+            options = self._choose_custom_list(custom, self.default_tags)
+            return random.choice(options)
+
+        def replace_emoji(match):
+            custom = match.group(1)
+            options = self._choose_custom_list(custom, self.default_emojis)
+            return random.choice(options)
+
+        def replace_num(match):
+            start = match.group(1)
+            end = match.group(2)
+            if start and end:
+                start_val = int(start)
+                end_val = int(end)
+            else:
+                start_val = 1
+                end_val = 999
+            if start_val > end_val:
+                start_val, end_val = end_val, start_val
+            return str(random.randint(start_val, end_val))
+
+        text = re.sub(r"\[\[tag(?::([^\]]+))?\]\]", replace_tag, text)
+        text = re.sub(r"\[\[emoji(?::([^\]]+))?\]\]", replace_emoji, text)
+        text = re.sub(r"\[\[num(?::(\d+)-(\d+))?\]\]", replace_num, text)
+        return text
+
+    def render_message(self, template):
+        message = self._replace_random_tokens(template)
+        return self.parse_spintax(message)
 
     def send_friend_request(self, client, user_id):
         """Opcjonalna funkcja wysyłania zaproszenia do znajomych."""
@@ -61,7 +102,7 @@ class DiscordWorker:
             remaining = end_time - time.monotonic()
             time.sleep(min(interval, max(0.0, remaining)))
 
-    def send_dm(self, token, user_id, message, proxy=None, add_friend=False):
+    def send_dm(self, token, user_id, message_template, proxy=None, add_friend=False):
         headers = {
             "Authorization": token,
             "Content-Type": "application/json",
@@ -94,8 +135,8 @@ class DiscordWorker:
 
                 msg_url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
 
-                # Losowanie wiadomości (Spintax)
-                final_msg = self.parse_spintax(message)
+                # Losowanie wiadomości (szablony + spintax)
+                final_msg = self.render_message(message_template)
 
                 for attempt in range(self.max_retries + 1):
                     msg_resp = client.post(msg_url, json={"content": final_msg})
@@ -110,7 +151,7 @@ class DiscordWorker:
             except Exception as e:
                 return False, str(e)
 
-    def run_mission(self, message, delay_min, delay_max, use_friend_req=False):
+    def run_mission(self, message_templates, delay_min, delay_max, use_friend_req=False):
         self.is_running = True
         self.log("[Mission] Startujemy...")
         self.db.reset_daily_counters()
@@ -134,7 +175,8 @@ class DiscordWorker:
 
                 t_id, u_id = target
                 did_send_attempt = True
-                success, msg = self.send_dm(token, u_id, message, proxy, use_friend_req)
+                chosen_template = random.choice(message_templates)
+                success, msg = self.send_dm(token, u_id, chosen_template, proxy, use_friend_req)
                 
                 if success:
                     self.db.update_target_status(t_id, "Sent")

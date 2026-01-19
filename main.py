@@ -90,7 +90,13 @@ class MassDMApp(ctk.CTk):
         # 5. SEKCJA WIADOMOŚCI
         self.msg_frame = ctk.CTkFrame(self.main_container)
         self.msg_frame.pack(fill="x", pady=10)
-        ctk.CTkLabel(self.msg_frame, text="Message Template", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=5)
+        ctk.CTkLabel(self.msg_frame, text="Message Templates", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=5)
+        ctk.CTkLabel(
+            self.msg_frame,
+            text="Szablony oddzielaj linią: --- | Tokeny: [[tag]], [[emoji]], [[num]], [[num:1-99]] | Spintax: {a|b}",
+            font=ctk.CTkFont(size=12),
+            text_color="#b0b0b0",
+        ).pack(pady=(0, 5))
         self.msg_input = ctk.CTkTextbox(self.msg_frame, height=100)
         self.msg_input.pack(fill="x", padx=20, pady=10)
 
@@ -235,11 +241,15 @@ class MassDMApp(ctk.CTk):
         thread.start()
 
     def start_mission(self):
-        msg = self.msg_input.get("1.0", "end").strip()
-        if not msg:
+        raw = self.msg_input.get("1.0", "end").strip()
+        if not raw:
             self.log_error("Pusta wiadomość.")
             return
-        thread = threading.Thread(target=self.worker.run_mission, args=(msg, 5, 10))
+        templates = [tpl.strip() for tpl in re.split(r"\n-{3,}\n", raw) if tpl.strip()]
+        if not templates:
+            self.log_error("Brak poprawnych szablonów wiadomości.")
+            return
+        thread = threading.Thread(target=self.worker.run_mission, args=(templates, 5, 10))
         thread.daemon = True
         thread.start()
 
