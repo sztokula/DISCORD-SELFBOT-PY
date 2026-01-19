@@ -29,7 +29,7 @@ class TokenManager:
         
         valid_count = 0
         for acc in accounts:
-            acc_id, _, token, _, _, _, _, _ = acc
+            acc_id, _, token, _, _, _, _, _, _, _, _ = acc
             is_valid, info = self.validate_token(token)
             
             if is_valid:

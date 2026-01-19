@@ -60,9 +60,13 @@ class DatabaseManager:
                     status TEXT DEFAULT 'Active',
                     daily_limit INTEGER DEFAULT 15,
                     sent_today INTEGER DEFAULT 0,
-                    last_use TIMESTAMP
+                    last_use TIMESTAMP,
+                    join_daily_limit INTEGER DEFAULT 5,
+                    join_today INTEGER DEFAULT 0,
+                    join_last_use TIMESTAMP
                 )
             ''')
+            self._ensure_account_columns(conn)
             self.migrate_plaintext_tokens(conn)
             # Tabela celów
             cursor.execute('''
@@ -77,6 +81,17 @@ class DatabaseManager:
             conn.commit()
             conn.close()
 
+    def _ensure_account_columns(self, conn):
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(accounts)")
+        existing = {row[1] for row in cursor.fetchall()}
+        if "join_daily_limit" not in existing:
+            cursor.execute("ALTER TABLE accounts ADD COLUMN join_daily_limit INTEGER DEFAULT 5")
+        if "join_today" not in existing:
+            cursor.execute("ALTER TABLE accounts ADD COLUMN join_today INTEGER DEFAULT 0")
+        if "join_last_use" not in existing:
+            cursor.execute("ALTER TABLE accounts ADD COLUMN join_last_use TIMESTAMP")
+
     def migrate_plaintext_tokens(self, conn):
         cursor = conn.cursor()
         cursor.execute("SELECT id, token FROM accounts")
@@ -87,7 +102,7 @@ class DatabaseManager:
             encrypted = self._encrypt_token(token)
             cursor.execute("UPDATE accounts SET token = ? WHERE id = ?", (encrypted, acc_id))
 
-    def add_account(self, platform, token, proxy="", limit=15):
+    def add_account(self, platform, token, proxy="", limit=15, join_limit=5):
         conn = None
         try:
             with self.write_lock:
@@ -95,9 +110,9 @@ class DatabaseManager:
                 cursor = conn.cursor()
                 encrypted_token = self._encrypt_token(token)
                 cursor.execute('''
-                    INSERT INTO accounts (platform, token, proxy, daily_limit)
-                    VALUES (?, ?, ?, ?)
-                ''', (platform, encrypted_token, proxy, limit))
+                    INSERT INTO accounts (platform, token, proxy, daily_limit, join_daily_limit)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (platform, encrypted_token, proxy, limit, join_limit))
                 conn.commit()
                 return True
         except sqlite3.IntegrityError:
@@ -130,6 +145,12 @@ class DatabaseManager:
                 SET sent_today = 0
                 WHERE sent_today > 0
                   AND (last_use IS NULL OR date(last_use) < date(?))
+            ''', (reference_date,))
+            cursor.execute('''
+                UPDATE accounts
+                SET join_today = 0
+                WHERE join_today > 0
+                  AND (join_last_use IS NULL OR date(join_last_use) < date(?))
             ''', (reference_date,))
             conn.commit()
             conn.close()
@@ -169,6 +190,18 @@ class DatabaseManager:
             cursor.execute('''
                 UPDATE accounts 
                 SET sent_today = sent_today + 1, last_use = ? 
+                WHERE id = ?
+            ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), account_id))
+            conn.commit()
+            conn.close()
+
+    def increment_join_counter(self, account_id):
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE accounts
+                SET join_today = join_today + 1, join_last_use = ?
                 WHERE id = ?
             ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), account_id))
             conn.commit()

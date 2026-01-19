@@ -52,8 +52,14 @@ class MassDMApp(ctk.CTk):
         self.token_input.grid(row=1, column=0, padx=10, pady=5)
         self.proxy_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Proxy (http://user:pass@ip:port)", width=350)
         self.proxy_input.grid(row=2, column=0, padx=10, pady=5)
+        self.dm_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="DM daily limit (np. 15)", width=350)
+        self.dm_limit_input.grid(row=3, column=0, padx=10, pady=5)
+        self.dm_limit_input.insert(0, "15")
+        self.join_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Join daily limit (np. 5)", width=350)
+        self.join_limit_input.grid(row=4, column=0, padx=10, pady=5)
+        self.join_limit_input.insert(0, "5")
         self.add_acc_btn = ctk.CTkButton(self.acc_frame, text="Add Account", command=self.add_account)
-        self.add_acc_btn.grid(row=1, column=1, rowspan=2, padx=10, pady=5, sticky="ns")
+        self.add_acc_btn.grid(row=1, column=1, rowspan=4, padx=10, pady=5, sticky="ns")
 
         # 2. SEKCJA JOINERA (NOWOŚĆ)
         self.joiner_frame = ctk.CTkFrame(self.main_container)
@@ -183,18 +189,37 @@ class MassDMApp(ctk.CTk):
     def add_account(self):
         token = self.token_input.get().strip()
         proxy = self.proxy_input.get().strip()
+        dm_limit_raw = self.dm_limit_input.get().strip()
+        join_limit_raw = self.join_limit_input.get().strip()
         if not self.validate_token_format(token):
             return
         if not self.validate_proxy(proxy):
+            return
+        try:
+            dm_limit = int(dm_limit_raw) if dm_limit_raw else 15
+        except ValueError:
+            self.log_error("Limit DM musi być liczbą całkowitą.")
+            return
+        try:
+            join_limit = int(join_limit_raw) if join_limit_raw else 5
+        except ValueError:
+            self.log_error("Limit joinów musi być liczbą całkowitą.")
+            return
+        if dm_limit <= 0 or join_limit <= 0:
+            self.log_error("Limity muszą być większe od zera.")
             return
         is_valid, info = self.token_manager.validate_token(token)
         if not is_valid:
             self.log_error(f"Token niepoprawny: {info}.")
             return
-        if self.db.add_account("discord", token, proxy):
-            self.add_log(f"Account added: {info}.")
+        if self.db.add_account("discord", token, proxy, dm_limit, join_limit):
+            self.add_log(f"Account added: {info}. DM limit: {dm_limit}, Join limit: {join_limit}.")
             self.token_input.delete(0, 'end')
             self.proxy_input.delete(0, 'end')
+            self.dm_limit_input.delete(0, 'end')
+            self.dm_limit_input.insert(0, "15")
+            self.join_limit_input.delete(0, 'end')
+            self.join_limit_input.insert(0, "5")
         else:
             self.log_error("Konto już istnieje lub token jest niepoprawny.")
 

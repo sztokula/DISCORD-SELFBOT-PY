@@ -163,7 +163,7 @@ class DiscordWorker:
             did_send_attempt = False
             for acc in accounts:
                 if not self.is_running: break
-                acc_id, _, token, proxy, _, limit, sent_today, _ = acc
+                acc_id, _, token, proxy, _, limit, sent_today, _, _, _, _ = acc
                 
                 if sent_today >= limit: continue
 

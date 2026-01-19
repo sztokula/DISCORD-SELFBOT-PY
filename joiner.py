@@ -66,6 +66,7 @@ class DiscordJoiner:
 
     def run_mass_join(self, invite_codes):
         self.is_running = True
+        self.db.reset_daily_counters()
         accounts = self.db.get_active_accounts("discord")
         
         if not accounts:
@@ -79,23 +80,31 @@ class DiscordJoiner:
 
         self.log(f"[Joiner] Rozpoczynam dołączanie {len(accounts)} kont do {len(invite_codes)} zaproszeń (losowo na konto).")
 
+        did_join_attempt = False
         for acc in accounts:
             if not self.is_running: break
             
-            acc_id, _, token, proxy, _, _, _, _ = acc
+            acc_id, _, token, proxy, _, _, _, _, join_limit, join_today, _ = acc
+            if join_today >= join_limit:
+                self.log(f"[Joiner] Konto {acc_id}: dzienny limit joinów osiągnięty ({join_today}/{join_limit}).")
+                continue
             invite_code = random.choice(invite_codes)
             success, msg = self.join_server(token, invite_code, proxy)
             
             if success:
+                self.db.increment_join_counter(acc_id)
                 self.log(f"[Joiner] Konto {acc_id}: DOŁĄCZONO ({invite_code}).")
             else:
                 self.log(f"[Joiner] Konto {acc_id}: BŁĄD ({msg}) [{invite_code}]")
             
+            did_join_attempt = True
             # BARDZO WAŻNE: Duży odstęp czasu przy dołączaniu
             wait = random.randint(10, 30)
             self.log(f"[Joiner] Oczekiwanie {wait}s przed następnym kontem...")
             self._sleep_with_stop(wait)
 
+        if self.is_running and not did_join_attempt:
+            self.log("[Joiner] Wszystkie konta mają dzienny limit joinów.")
         self.log("[Joiner] Proces masowego dołączania zakończony.")
         self.is_running = False
 

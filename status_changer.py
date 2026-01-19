@@ -90,7 +90,7 @@ class StatusChanger:
         for acc in accounts:
             if not self.is_running: break
             
-            acc_id, _, token, proxy, _, _, _, _ = acc
+            acc_id, _, token, proxy, _, _, _, _, _, _, _ = acc
             success = self.change_status(token, status_type, custom_text, proxy)
             
             if success:
