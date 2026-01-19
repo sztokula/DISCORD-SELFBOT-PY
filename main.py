@@ -31,69 +31,21 @@ class MassDMApp(ctk.CTk):
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
+        self.settings_window = None
 
         # --- SIDEBAR ---
         self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         self.logo = ctk.CTkLabel(self.sidebar, text="FARM TOOL", font=ctk.CTkFont(size=24, weight="bold"))
         self.logo.grid(row=0, column=0, padx=20, pady=30)
-        self.btn_discord = ctk.CTkButton(self.sidebar, text="Discord Module")
-        self.btn_discord.grid(row=1, column=0, padx=20, pady=10)
+        self.btn_settings = ctk.CTkButton(self.sidebar, text="Open Settings", command=self.open_settings_window)
+        self.btn_settings.grid(row=1, column=0, padx=20, pady=10)
 
         # --- MAIN CONTENT AREA ---
-        self.main_container = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.main_container = ctk.CTkFrame(self, fg_color="transparent")
         self.main_container.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
 
-        # 1. SEKCA KONFIGURACJI (Konta + Proxy)
-        self.acc_frame = ctk.CTkFrame(self.main_container)
-        self.acc_frame.pack(fill="x", pady=10)
-        ctk.CTkLabel(self.acc_frame, text="Account & Proxy Management", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
-        self.token_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Discord Token", width=350)
-        self.token_input.grid(row=1, column=0, padx=10, pady=5)
-        self.proxy_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Proxy (http://user:pass@ip:port)", width=350)
-        self.proxy_input.grid(row=2, column=0, padx=10, pady=5)
-        self.dm_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="DM daily limit (np. 15)", width=350)
-        self.dm_limit_input.grid(row=3, column=0, padx=10, pady=5)
-        self.dm_limit_input.insert(0, "15")
-        self.join_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Join daily limit (np. 5)", width=350)
-        self.join_limit_input.grid(row=4, column=0, padx=10, pady=5)
-        self.join_limit_input.insert(0, "5")
-        self.add_acc_btn = ctk.CTkButton(self.acc_frame, text="Add Account", command=self.add_account)
-        self.add_acc_btn.grid(row=1, column=1, rowspan=4, padx=10, pady=5, sticky="ns")
-
-        # 2. SEKCJA JOINERA (NOWOŚĆ)
-        self.joiner_frame = ctk.CTkFrame(self.main_container)
-        self.joiner_frame.pack(fill="x", pady=10)
-        ctk.CTkLabel(self.joiner_frame, text="Server Joiner (Mass Join)", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
-        self.invite_input = ctk.CTkTextbox(self.joiner_frame, height=80, width=350)
-        self.invite_input.grid(row=1, column=0, padx=10, pady=5)
-        self.invite_input.insert("1.0", "Invite link/code per line (e.g. discord.gg/xyz)\n")
-        self.join_btn = ctk.CTkButton(self.joiner_frame, text="Join Server", fg_color="#f39c12", hover_color="#d35400", command=self.start_joining)
-        self.join_btn.grid(row=1, column=1, padx=10, pady=5)
-
-        # 3. SEKCJA STATUSU
-        self.status_frame = ctk.CTkFrame(self.main_container)
-        self.status_frame.pack(fill="x", pady=10)
-        ctk.CTkLabel(self.status_frame, text="Status & Presence", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
-        self.status_text_input = ctk.CTkEntry(self.status_frame, placeholder_text="Custom Status", width=350)
-        self.status_text_input.grid(row=1, column=0, padx=10, pady=5)
-        self.status_text_input.insert(0, "Playing Metin2")
-        self.status_type_var = ctk.StringVar(value="online")
-        self.status_dropdown = ctk.CTkOptionMenu(self.status_frame, values=["online", "idle", "dnd", "invisible"], variable=self.status_type_var)
-        self.status_dropdown.grid(row=1, column=1, padx=10, pady=5)
-        self.update_status_btn = ctk.CTkButton(self.status_frame, text="Update Statuses", fg_color="#9b59b6", command=self.start_status_update)
-        self.update_status_btn.grid(row=2, column=0, columnspan=2, pady=10)
-
-        # 4. SEKCJA SCRAPERA
-        self.scrape_frame = ctk.CTkFrame(self.main_container)
-        self.scrape_frame.pack(fill="x", pady=10)
-        ctk.CTkLabel(self.scrape_frame, text="Scraping Tools", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
-        self.scrape_channel_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Channel ID", width=350)
-        self.scrape_channel_input.grid(row=1, column=0, padx=10, pady=5)
-        self.scrape_btn = ctk.CTkButton(self.scrape_frame, text="Scrape Users", command=self.start_scraping)
-        self.scrape_btn.grid(row=1, column=1, padx=10, pady=5)
-
-        # 5. SEKCJA WIADOMOŚCI
+        # 1. SEKCJA WIADOMOŚCI
         self.msg_frame = ctk.CTkFrame(self.main_container)
         self.msg_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.msg_frame, text="Message Templates", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=5)
@@ -106,7 +58,7 @@ class MassDMApp(ctk.CTk):
         self.msg_input = ctk.CTkTextbox(self.msg_frame, height=100)
         self.msg_input.pack(fill="x", padx=20, pady=10)
 
-        # 6. SEKCJA LOGÓW
+        # 2. SEKCJA LOGÓW
         self.log_frame = ctk.CTkFrame(self.main_container)
         self.log_frame.pack(fill="both", expand=True, pady=10)
         self.log_box = ctk.CTkTextbox(self.log_frame, height=200, fg_color="#1a1a1a")
@@ -121,6 +73,7 @@ class MassDMApp(ctk.CTk):
         self.stop_btn.pack(side="right", padx=50, pady=20)
 
         self.after(100, self.process_log_queue)
+        self.open_settings_window()
 
     def add_log(self, message):
         self.log_queue.put(message)
@@ -284,6 +237,75 @@ class MassDMApp(ctk.CTk):
         self.status_changer.stop()
         self.joiner.stop()
         self.add_log("All processes stopped.")
+
+    def open_settings_window(self):
+        if self.settings_window and self.settings_window.winfo_exists():
+            self.settings_window.focus()
+            return
+        self.settings_window = ctk.CTkToplevel(self)
+        self.settings_window.title("Configuration")
+        self.settings_window.geometry("900x900")
+        self.settings_window.grid_columnconfigure(0, weight=1)
+        self.settings_window.grid_rowconfigure(0, weight=1)
+        self.settings_container = ctk.CTkScrollableFrame(self.settings_window, fg_color="transparent")
+        self.settings_container.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
+        self._build_settings_sections(self.settings_container)
+        self.settings_window.protocol("WM_DELETE_WINDOW", self.close_settings_window)
+
+    def close_settings_window(self):
+        if self.settings_window and self.settings_window.winfo_exists():
+            self.settings_window.destroy()
+        self.settings_window = None
+
+    def _build_settings_sections(self, parent):
+        # 1. SEKCA KONFIGURACJI (Konta + Proxy)
+        self.acc_frame = ctk.CTkFrame(parent)
+        self.acc_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(self.acc_frame, text="Account & Proxy Management", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        self.token_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Discord Token", width=350)
+        self.token_input.grid(row=1, column=0, padx=10, pady=5)
+        self.proxy_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Proxy (http://user:pass@ip:port)", width=350)
+        self.proxy_input.grid(row=2, column=0, padx=10, pady=5)
+        self.dm_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="DM daily limit (np. 15)", width=350)
+        self.dm_limit_input.grid(row=3, column=0, padx=10, pady=5)
+        self.dm_limit_input.insert(0, "15")
+        self.join_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Join daily limit (np. 5)", width=350)
+        self.join_limit_input.grid(row=4, column=0, padx=10, pady=5)
+        self.join_limit_input.insert(0, "5")
+        self.add_acc_btn = ctk.CTkButton(self.acc_frame, text="Add Account", command=self.add_account)
+        self.add_acc_btn.grid(row=1, column=1, rowspan=4, padx=10, pady=5, sticky="ns")
+
+        # 2. SEKCJA JOINERA (NOWOŚĆ)
+        self.joiner_frame = ctk.CTkFrame(parent)
+        self.joiner_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(self.joiner_frame, text="Server Joiner (Mass Join)", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        self.invite_input = ctk.CTkTextbox(self.joiner_frame, height=80, width=350)
+        self.invite_input.grid(row=1, column=0, padx=10, pady=5)
+        self.invite_input.insert("1.0", "Invite link/code per line (e.g. discord.gg/xyz)\n")
+        self.join_btn = ctk.CTkButton(self.joiner_frame, text="Join Server", fg_color="#f39c12", hover_color="#d35400", command=self.start_joining)
+        self.join_btn.grid(row=1, column=1, padx=10, pady=5)
+
+        # 3. SEKCJA STATUSU
+        self.status_frame = ctk.CTkFrame(parent)
+        self.status_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(self.status_frame, text="Status & Presence", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        self.status_text_input = ctk.CTkEntry(self.status_frame, placeholder_text="Custom Status", width=350)
+        self.status_text_input.grid(row=1, column=0, padx=10, pady=5)
+        self.status_text_input.insert(0, "Playing Metin2")
+        self.status_type_var = ctk.StringVar(value="online")
+        self.status_dropdown = ctk.CTkOptionMenu(self.status_frame, values=["online", "idle", "dnd", "invisible"], variable=self.status_type_var)
+        self.status_dropdown.grid(row=1, column=1, padx=10, pady=5)
+        self.update_status_btn = ctk.CTkButton(self.status_frame, text="Update Statuses", fg_color="#9b59b6", command=self.start_status_update)
+        self.update_status_btn.grid(row=2, column=0, columnspan=2, pady=10)
+
+        # 4. SEKCJA SCRAPERA
+        self.scrape_frame = ctk.CTkFrame(parent)
+        self.scrape_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(self.scrape_frame, text="Scraping Tools", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        self.scrape_channel_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Channel ID", width=350)
+        self.scrape_channel_input.grid(row=1, column=0, padx=10, pady=5)
+        self.scrape_btn = ctk.CTkButton(self.scrape_frame, text="Scrape Users", command=self.start_scraping)
+        self.scrape_btn.grid(row=1, column=1, padx=10, pady=5)
 
 if __name__ == "__main__":
     app = MassDMApp()
