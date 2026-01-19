@@ -59,8 +59,9 @@ class MassDMApp(ctk.CTk):
         self.joiner_frame = ctk.CTkFrame(self.main_container)
         self.joiner_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.joiner_frame, text="Server Joiner (Mass Join)", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
-        self.invite_input = ctk.CTkEntry(self.joiner_frame, placeholder_text="Invite Code or Link (e.g. discord.gg/xyz)", width=350)
+        self.invite_input = ctk.CTkTextbox(self.joiner_frame, height=80, width=350)
         self.invite_input.grid(row=1, column=0, padx=10, pady=5)
+        self.invite_input.insert("1.0", "Invite link/code per line (e.g. discord.gg/xyz)\n")
         self.join_btn = ctk.CTkButton(self.joiner_frame, text="Join Server", fg_color="#f39c12", hover_color="#d35400", command=self.start_joining)
         self.join_btn.grid(row=1, column=1, padx=10, pady=5)
 
@@ -191,13 +192,27 @@ class MassDMApp(ctk.CTk):
         else:
             self.log_error("Konto już istnieje lub token jest niepoprawny.")
 
+    def _get_invite_list(self):
+        raw_text = self.invite_input.get("1.0", "end")
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        normalized = []
+        invalid = []
+        for line in lines:
+            code = self.normalize_invite(line)
+            if code:
+                normalized.append(code)
+            else:
+                invalid.append(line)
+        if invalid:
+            self.log_error(f"Niepoprawne zaproszenia (pomijam): {', '.join(invalid)}")
+        return normalized
+
     def start_joining(self):
-        invite = self.invite_input.get()
-        normalized_invite = self.normalize_invite(invite)
-        if not normalized_invite:
-            self.log_error("Niepoprawny format zaproszenia.")
+        invites = self._get_invite_list()
+        if not invites:
+            self.log_error("Brak poprawnych zaproszeń.")
             return
-        thread = threading.Thread(target=self.joiner.run_mass_join, args=(normalized_invite,))
+        thread = threading.Thread(target=self.joiner.run_mass_join, args=(invites,))
         thread.daemon = True
         thread.start()
 

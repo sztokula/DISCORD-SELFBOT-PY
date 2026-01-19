@@ -64,7 +64,7 @@ class DiscordJoiner:
 
         return False, "Rate Limit (po ponownych próbach)"
 
-    def run_mass_join(self, invite_code):
+    def run_mass_join(self, invite_codes):
         self.is_running = True
         accounts = self.db.get_active_accounts("discord")
         
@@ -72,18 +72,24 @@ class DiscordJoiner:
             self.log("[Joiner] Brak aktywnych kont do operacji.")
             return
 
-        self.log(f"[Joiner] Rozpoczynam dołączanie {len(accounts)} kont do zaproszenia: {invite_code}")
+        if not invite_codes:
+            self.log("[Joiner] Brak poprawnych zaproszeń.")
+            self.is_running = False
+            return
+
+        self.log(f"[Joiner] Rozpoczynam dołączanie {len(accounts)} kont do {len(invite_codes)} zaproszeń (losowo na konto).")
 
         for acc in accounts:
             if not self.is_running: break
             
             acc_id, _, token, proxy, _, _, _, _ = acc
+            invite_code = random.choice(invite_codes)
             success, msg = self.join_server(token, invite_code, proxy)
             
             if success:
-                self.log(f"[Joiner] Konto {acc_id}: DOŁĄCZONO.")
+                self.log(f"[Joiner] Konto {acc_id}: DOŁĄCZONO ({invite_code}).")
             else:
-                self.log(f"[Joiner] Konto {acc_id}: BŁĄD ({msg})")
+                self.log(f"[Joiner] Konto {acc_id}: BŁĄD ({msg}) [{invite_code}]")
             
             # BARDZO WAŻNE: Duży odstęp czasu przy dołączaniu
             wait = random.randint(10, 30)
