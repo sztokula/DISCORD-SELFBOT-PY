@@ -1,4 +1,5 @@
 import customtkinter as ctk
+import queue
 import threading
 from database import DatabaseManager
 from discord_worker import DiscordWorker
@@ -14,6 +15,7 @@ class MassDMApp(ctk.CTk):
         super().__init__()
         
         self.db = DatabaseManager()
+        self.log_queue = queue.Queue()
         self.worker = DiscordWorker(self.db, self.add_log)
         self.scraper = DiscordScraper(self.db, self.add_log)
         self.status_changer = StatusChanger(self.db, self.add_log)
@@ -100,9 +102,20 @@ class MassDMApp(ctk.CTk):
         self.stop_btn = ctk.CTkButton(self.control_bar, text="STOP ALL", fg_color="#e74c3c", command=self.stop_all)
         self.stop_btn.pack(side="right", padx=50, pady=20)
 
+        self.after(100, self.process_log_queue)
+
     def add_log(self, message):
-        self.log_box.insert("end", f"> {message}\n")
-        self.log_box.see("end")
+        self.log_queue.put(message)
+
+    def process_log_queue(self):
+        try:
+            while True:
+                message = self.log_queue.get_nowait()
+                self.log_box.insert("end", f"> {message}\n")
+                self.log_box.see("end")
+        except queue.Empty:
+            pass
+        self.after(100, self.process_log_queue)
 
     def add_account(self):
         token = self.token_input.get()

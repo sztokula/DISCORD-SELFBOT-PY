@@ -1,4 +1,5 @@
 import customtkinter as ctk
+import queue
 import threading
 import time
 
@@ -47,6 +48,8 @@ class MassDMApp(ctk.CTk):
         self.stat_errors = ctk.CTkLabel(self.stats_frame, text="Errors: 0", width=150, text_color="red")
         self.stat_errors.pack(side="left", padx=20, pady=10)
 
+        self.log_queue = queue.Queue()
+
         # Konsola Logów
         self.log_box = ctk.CTkTextbox(self.main_frame, width=600, height=300)
         self.log_box.pack(padx=20, pady=20)
@@ -56,10 +59,21 @@ class MassDMApp(ctk.CTk):
         self.start_btn = ctk.CTkButton(self.main_frame, text="START MISSION", fg_color="green", hover_color="darkgreen", command=self.start_process)
         self.start_btn.pack(pady=10)
 
+        self.after(100, self.process_log_queue)
+
     def add_log(self, message):
         timestamp = time.strftime("%H:%M:%S")
-        self.log_box.insert("end", f"[{timestamp}] {message}\n")
-        self.log_box.see("end")
+        self.log_queue.put((timestamp, message))
+
+    def process_log_queue(self):
+        try:
+            while True:
+                timestamp, message = self.log_queue.get_nowait()
+                self.log_box.insert("end", f"[{timestamp}] {message}\n")
+                self.log_box.see("end")
+        except queue.Empty:
+            pass
+        self.after(100, self.process_log_queue)
 
     def show_discord(self):
         self.add_log("Przełączono na moduł Discord.")
