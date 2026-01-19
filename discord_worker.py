@@ -27,7 +27,8 @@ class DiscordWorker:
         try:
             resp = client.put(url, json={})
             return resp.status_code == 204
-        except:
+        except Exception as e:
+            self.log(f"[Friend Request] Exception for user {user_id}: {e}")
             return False
 
     def _get_retry_after(self, response, default=5.0):
