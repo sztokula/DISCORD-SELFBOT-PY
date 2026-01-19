@@ -19,7 +19,7 @@ class DiscordScraper:
         last_msg_id = None
         
         try:
-            with httpx.Client(headers=headers) as client:
+            with httpx.Client(headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 while len(unique_ids) < limit and self.is_scraping:
                     params = {"limit": 100}
                     if last_msg_id:

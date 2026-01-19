@@ -36,7 +36,7 @@ class DiscordWorker:
         }
         proxies = {"all://": proxy} if proxy else None
         
-        with httpx.Client(proxies=proxies, headers=headers) as client:
+        with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
             try:
                 # Opcjonalnie: Zaproszenie do znajomych
                 if add_friend:

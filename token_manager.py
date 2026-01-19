@@ -11,7 +11,7 @@ class TokenManager:
         headers = {"Authorization": token}
         
         try:
-            with httpx.Client(headers=headers) as client:
+            with httpx.Client(headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 response = client.get(url)
                 if response.status_code == 200:
                     data = response.json()

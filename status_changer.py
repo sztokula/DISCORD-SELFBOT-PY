@@ -28,7 +28,7 @@ class StatusChanger:
         proxies = {"all://": proxy} if proxy else None
         
         try:
-            with httpx.Client(proxies=proxies, headers=headers) as client:
+            with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 response = client.patch(url, json=data)
                 if response.status_code == 200:
                     return True
