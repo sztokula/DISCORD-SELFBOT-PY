@@ -1,6 +1,8 @@
 import customtkinter as ctk
 import queue
+import re
 import threading
+from urllib.parse import urlparse
 from database import DatabaseManager
 from discord_worker import DiscordWorker
 from scraper import DiscordScraper
@@ -108,6 +110,57 @@ class MassDMApp(ctk.CTk):
     def add_log(self, message):
         self.log_queue.put(message)
 
+    def log_error(self, message):
+        self.add_log(f"Błąd: {message}")
+
+    def validate_token(self, token):
+        if not token:
+            self.log_error("Niepoprawny token: puste pole.")
+            return False
+        token_pattern = re.compile(r"^[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+$")
+        if not token_pattern.match(token) or len(token) < 50:
+            self.log_error("Niepoprawny format tokena.")
+            return False
+        return True
+
+    def validate_proxy(self, proxy):
+        if not proxy:
+            return True
+        parsed = urlparse(proxy)
+        if parsed.scheme and parsed.hostname and parsed.port:
+            if parsed.scheme not in {"http", "https", "socks5"}:
+                self.log_error("Niepoprawny format proxy.")
+                return False
+            return True
+        parsed = urlparse(f"http://{proxy}")
+        if parsed.hostname and parsed.port:
+            return True
+        self.log_error("Niepoprawny format proxy.")
+        return False
+
+    def normalize_invite(self, invite):
+        invite = invite.strip()
+        if not invite:
+            return None
+        url_match = re.match(
+            r"^(?:https?://)?(?:www\.)?(?:discord\.gg|discord(?:app)?\.com/invite)/([A-Za-z0-9-]+)$",
+            invite,
+        )
+        if url_match:
+            return url_match.group(1)
+        if re.match(r"^[A-Za-z0-9-]{2,}$", invite):
+            return invite
+        return None
+
+    def is_valid_channel_id(self, channel_id):
+        if not channel_id:
+            self.log_error("Niepoprawny Channel ID: puste pole.")
+            return False
+        if not re.match(r"^\d{17,20}$", channel_id):
+            self.log_error("Niepoprawny format Channel ID.")
+            return False
+        return True
+
     def process_log_queue(self):
         try:
             while True:
@@ -119,27 +172,39 @@ class MassDMApp(ctk.CTk):
         self.after(100, self.process_log_queue)
 
     def add_account(self):
-        token = self.token_input.get()
-        proxy = self.proxy_input.get()
-        if token and self.db.add_account("discord", token, proxy):
+        token = self.token_input.get().strip()
+        proxy = self.proxy_input.get().strip()
+        if not self.validate_token(token):
+            return
+        if not self.validate_proxy(proxy):
+            return
+        if self.db.add_account("discord", token, proxy):
             self.add_log(f"Account added: {token[:15]}...")
             self.token_input.delete(0, 'end')
             self.proxy_input.delete(0, 'end')
+        else:
+            self.log_error("Konto już istnieje lub token jest niepoprawny.")
 
     def start_joining(self):
         invite = self.invite_input.get()
-        if invite:
-            thread = threading.Thread(target=self.joiner.run_mass_join, args=(invite,))
-            thread.daemon = True
-            thread.start()
+        normalized_invite = self.normalize_invite(invite)
+        if not normalized_invite:
+            self.log_error("Niepoprawny format zaproszenia.")
+            return
+        thread = threading.Thread(target=self.joiner.run_mass_join, args=(normalized_invite,))
+        thread.daemon = True
+        thread.start()
 
     def start_scraping(self):
-        token = self.token_input.get()
-        channel_id = self.scrape_channel_input.get()
-        if token and channel_id:
-            thread = threading.Thread(target=self.scraper.scrape_history, args=(token, channel_id, 500))
-            thread.daemon = True
-            thread.start()
+        token = self.token_input.get().strip()
+        channel_id = self.scrape_channel_input.get().strip()
+        if not self.validate_token(token):
+            return
+        if not self.is_valid_channel_id(channel_id):
+            return
+        thread = threading.Thread(target=self.scraper.scrape_history, args=(token, channel_id, 500))
+        thread.daemon = True
+        thread.start()
 
     def start_status_update(self):
         status_type = self.status_type_var.get()
@@ -150,6 +215,9 @@ class MassDMApp(ctk.CTk):
 
     def start_mission(self):
         msg = self.msg_input.get("1.0", "end").strip()
+        if not msg:
+            self.log_error("Pusta wiadomość.")
+            return
         thread = threading.Thread(target=self.worker.run_mission, args=(msg, 5, 10))
         thread.daemon = True
         thread.start()
