@@ -31,7 +31,13 @@ class DiscordScraper:
     def _wait_for_rate_limit(self, response, attempt):
         retry_after = self._get_retry_after(response)
         wait_time = retry_after * (self.backoff_factor ** attempt)
-        time.sleep(wait_time)
+        self._sleep_with_stop(wait_time)
+
+    def _sleep_with_stop(self, total_seconds, interval=0.5):
+        end_time = time.monotonic() + max(0.0, total_seconds)
+        while self.is_scraping and time.monotonic() < end_time:
+            remaining = end_time - time.monotonic()
+            time.sleep(min(interval, max(0.0, remaining)))
 
     def _fetch_self_id(self, client):
         response = client.get("https://discord.com/api/v9/users/@me")
@@ -92,7 +98,7 @@ class DiscordScraper:
                         last_msg_id = msg['id']
                     
                     self.log(f"[Scraper] Znaleziono unikalnych: {len(unique_ids)}...")
-                    time.sleep(1) # Delay, żeby nie dostać Rate Limit
+                    self._sleep_with_stop(1) # Delay, żeby nie dostać Rate Limit
             
             # Zapis do bazy
             if unique_ids:

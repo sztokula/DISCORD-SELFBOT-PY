@@ -32,7 +32,13 @@ class StatusChanger:
     def _wait_for_rate_limit(self, response, attempt):
         retry_after = self._get_retry_after(response)
         wait_time = retry_after * (self.backoff_factor ** attempt)
-        time.sleep(wait_time)
+        self._sleep_with_stop(wait_time)
+
+    def _sleep_with_stop(self, total_seconds, interval=0.5):
+        end_time = time.monotonic() + max(0.0, total_seconds)
+        while self.is_running and time.monotonic() < end_time:
+            remaining = end_time - time.monotonic()
+            time.sleep(min(interval, max(0.0, remaining)))
 
     def change_status(self, token, status_type, custom_text, proxy=None):
         """
@@ -91,7 +97,7 @@ class StatusChanger:
                 self.log(f"[Status] Konto {acc_id} zaktualizowane.")
             
             # Mały delay, żeby nie wysłać wszystkiego w jednej sekundzie
-            time.sleep(random.uniform(1.0, 3.0))
+            self._sleep_with_stop(random.uniform(1.0, 3.0))
             
         self.log("[Status] Proces aktualizacji zakończony.")
         self.is_running = False

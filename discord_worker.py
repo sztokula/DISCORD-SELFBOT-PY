@@ -53,7 +53,13 @@ class DiscordWorker:
     def _wait_for_rate_limit(self, response, attempt):
         retry_after = self._get_retry_after(response)
         wait_time = retry_after * (self.backoff_factor ** attempt)
-        time.sleep(wait_time)
+        self._sleep_with_stop(wait_time)
+
+    def _sleep_with_stop(self, total_seconds, interval=0.5):
+        end_time = time.monotonic() + max(0.0, total_seconds)
+        while self.is_running and time.monotonic() < end_time:
+            remaining = end_time - time.monotonic()
+            time.sleep(min(interval, max(0.0, remaining)))
 
     def send_dm(self, token, user_id, message, proxy=None, add_friend=False):
         headers = {
@@ -68,7 +74,7 @@ class DiscordWorker:
                 # Opcjonalnie: Zaproszenie do znajomych
                 if add_friend:
                     self.send_friend_request(client, user_id)
-                    time.sleep(random.randint(2, 5))
+                    self._sleep_with_stop(random.randint(2, 5))
 
                 # Otwarcie kanału DM
                 url_channel = "https://discord.com/api/v9/users/@me/channels"
@@ -138,11 +144,11 @@ class DiscordWorker:
                     self.db.update_target_status(t_id, "Failed", msg)
                     self.log(f"[!] Błąd {u_id}: {msg}")
 
-                time.sleep(random.randint(delay_min, delay_max))
+                self._sleep_with_stop(random.randint(delay_min, delay_max))
 
             if self.is_running and not did_send_attempt:
                 self.log("[Mission] Wszystkie konta mają dzienny limit. Uśpienie przed kolejną próbą.")
-                time.sleep(5)
+                self._sleep_with_stop(5)
 
     def stop(self):
         self.is_running = False

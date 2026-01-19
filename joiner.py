@@ -55,7 +55,7 @@ class DiscordJoiner:
                     elif response.status_code == 429:
                         retry_after = self._get_retry_after(response)
                         wait_time = retry_after * (backoff_factor ** attempt)
-                        time.sleep(wait_time)
+                        self._sleep_with_stop(wait_time)
                         continue
                     else:
                         return False, f"Błąd {response.status_code}"
@@ -88,10 +88,16 @@ class DiscordJoiner:
             # BARDZO WAŻNE: Duży odstęp czasu przy dołączaniu
             wait = random.randint(10, 30)
             self.log(f"[Joiner] Oczekiwanie {wait}s przed następnym kontem...")
-            time.sleep(wait)
+            self._sleep_with_stop(wait)
 
         self.log("[Joiner] Proces masowego dołączania zakończony.")
         self.is_running = False
 
     def stop(self):
         self.is_running = False
+
+    def _sleep_with_stop(self, total_seconds, interval=0.5):
+        end_time = time.monotonic() + max(0.0, total_seconds)
+        while self.is_running and time.monotonic() < end_time:
+            remaining = end_time - time.monotonic()
+            time.sleep(min(interval, max(0.0, remaining)))
