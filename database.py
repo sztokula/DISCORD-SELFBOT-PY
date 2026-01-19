@@ -1,6 +1,7 @@
 import base64
 import os
 import sqlite3
+import threading
 from datetime import datetime
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -8,11 +9,15 @@ from cryptography.fernet import Fernet, InvalidToken
 class DatabaseManager:
     def __init__(self, db_name="farm_tool.db"):
         self.db_name = db_name
+        self.write_lock = threading.Lock()
         self.fernet = self._init_fernet()
         self.init_db()
 
     def get_connection(self):
-        return sqlite3.connect(self.db_name)
+        conn = sqlite3.connect(self.db_name, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=30000;")
+        return conn
 
     def _init_fernet(self):
         key = os.getenv("TOKEN_ENCRYPTION_KEY")
@@ -42,34 +47,35 @@ class DatabaseManager:
             raise RuntimeError("Nieprawidłowy klucz szyfrowania tokenów.")
 
     def init_db(self):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        # Tabela kont (zachowujemy kolumnę proxy)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS accounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                platform TEXT NOT NULL,
-                token TEXT UNIQUE NOT NULL,
-                proxy TEXT,
-                status TEXT DEFAULT 'Active',
-                daily_limit INTEGER DEFAULT 15,
-                sent_today INTEGER DEFAULT 0,
-                last_use TIMESTAMP
-            )
-        ''')
-        self.migrate_plaintext_tokens(conn)
-        # Tabela celów
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS targets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT UNIQUE NOT NULL,
-                platform TEXT NOT NULL,
-                status TEXT DEFAULT 'Pending',
-                error_msg TEXT
-            )
-        ''')
-        conn.commit()
-        conn.close()
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            # Tabela kont (zachowujemy kolumnę proxy)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    platform TEXT NOT NULL,
+                    token TEXT UNIQUE NOT NULL,
+                    proxy TEXT,
+                    status TEXT DEFAULT 'Active',
+                    daily_limit INTEGER DEFAULT 15,
+                    sent_today INTEGER DEFAULT 0,
+                    last_use TIMESTAMP
+                )
+            ''')
+            self.migrate_plaintext_tokens(conn)
+            # Tabela celów
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS targets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT UNIQUE NOT NULL,
+                    platform TEXT NOT NULL,
+                    status TEXT DEFAULT 'Pending',
+                    error_msg TEXT
+                )
+            ''')
+            conn.commit()
+            conn.close()
 
     def migrate_plaintext_tokens(self, conn):
         cursor = conn.cursor()
@@ -82,20 +88,23 @@ class DatabaseManager:
             cursor.execute("UPDATE accounts SET token = ? WHERE id = ?", (encrypted, acc_id))
 
     def add_account(self, platform, token, proxy="", limit=15):
+        conn = None
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            encrypted_token = self._encrypt_token(token)
-            cursor.execute('''
-                INSERT INTO accounts (platform, token, proxy, daily_limit)
-                VALUES (?, ?, ?, ?)
-            ''', (platform, encrypted_token, proxy, limit))
-            conn.commit()
-            return True
+            with self.write_lock:
+                conn = self.get_connection()
+                cursor = conn.cursor()
+                encrypted_token = self._encrypt_token(token)
+                cursor.execute('''
+                    INSERT INTO accounts (platform, token, proxy, daily_limit)
+                    VALUES (?, ?, ?, ?)
+                ''', (platform, encrypted_token, proxy, limit))
+                conn.commit()
+                return True
         except sqlite3.IntegrityError:
             return False
         finally:
-            conn.close()
+            if conn:
+                conn.close()
 
     def get_active_accounts(self, platform):
         conn = self.get_connection()
@@ -113,27 +122,29 @@ class DatabaseManager:
         if reference_datetime is None:
             reference_datetime = datetime.now()
         reference_date = reference_datetime.strftime("%Y-%m-%d")
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE accounts
-            SET sent_today = 0
-            WHERE sent_today > 0
-              AND (last_use IS NULL OR date(last_use) < date(?))
-        ''', (reference_date,))
-        conn.commit()
-        conn.close()
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE accounts
+                SET sent_today = 0
+                WHERE sent_today > 0
+                  AND (last_use IS NULL OR date(last_use) < date(?))
+            ''', (reference_date,))
+            conn.commit()
+            conn.close()
 
     def add_targets(self, user_ids, platform):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        for uid in user_ids:
-            try:
-                cursor.execute('INSERT INTO targets (user_id, platform) VALUES (?, ?)', (uid, platform))
-            except sqlite3.IntegrityError:
-                continue
-        conn.commit()
-        conn.close()
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            for uid in user_ids:
+                try:
+                    cursor.execute('INSERT INTO targets (user_id, platform) VALUES (?, ?)', (uid, platform))
+                except sqlite3.IntegrityError:
+                    continue
+            conn.commit()
+            conn.close()
 
     def get_next_target(self, platform):
         conn = self.get_connection()
@@ -144,26 +155,29 @@ class DatabaseManager:
         return target
 
     def update_target_status(self, target_id, status, error_msg=""):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('UPDATE targets SET status = ?, error_msg = ? WHERE id = ?', (status, error_msg, target_id))
-        conn.commit()
-        conn.close()
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('UPDATE targets SET status = ?, error_msg = ? WHERE id = ?', (status, error_msg, target_id))
+            conn.commit()
+            conn.close()
 
     def increment_sent_counter(self, account_id):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE accounts 
-            SET sent_today = sent_today + 1, last_use = ? 
-            WHERE id = ?
-        ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), account_id))
-        conn.commit()
-        conn.close()
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE accounts 
+                SET sent_today = sent_today + 1, last_use = ? 
+                WHERE id = ?
+            ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), account_id))
+            conn.commit()
+            conn.close()
 
     def update_account_status(self, account_id, status):
-        conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute('UPDATE accounts SET status = ? WHERE id = ?', (status, account_id))
-        conn.commit()
-        conn.close()
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('UPDATE accounts SET status = ? WHERE id = ?', (status, account_id))
+            conn.commit()
+            conn.close()
