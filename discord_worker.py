@@ -8,6 +8,8 @@ class DiscordWorker:
         self.db = db_manager
         self.log = log_callback
         self.is_running = False
+        self.max_retries = 3
+        self.backoff_factor = 1.5
 
     def parse_spintax(self, text):
         """Zamienia {opcja1|opcja2} na losową opcję."""
@@ -28,6 +30,30 @@ class DiscordWorker:
         except:
             return False
 
+    def _get_retry_after(self, response, default=5.0):
+        retry_header = response.headers.get("Retry-After")
+        if retry_header:
+            try:
+                return float(retry_header)
+            except ValueError:
+                pass
+        try:
+            data = response.json()
+        except Exception:
+            return default
+        retry_after = data.get("retry_after")
+        if retry_after is None:
+            return default
+        try:
+            return float(retry_after)
+        except (TypeError, ValueError):
+            return default
+
+    def _wait_for_rate_limit(self, response, attempt):
+        retry_after = self._get_retry_after(response)
+        wait_time = retry_after * (self.backoff_factor ** attempt)
+        time.sleep(wait_time)
+
     def send_dm(self, token, user_id, message, proxy=None, add_friend=False):
         headers = {
             "Authorization": token,
@@ -45,18 +71,35 @@ class DiscordWorker:
 
                 # Otwarcie kanału DM
                 url_channel = "https://discord.com/api/v9/users/@me/channels"
-                response = client.post(url_channel, json={"recipient_id": user_id})
-                
-                if response.status_code == 200:
-                    channel_id = response.json()['id']
-                    msg_url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
-                    
-                    # Losowanie wiadomości (Spintax)
-                    final_msg = self.parse_spintax(message)
-                    
+                channel_id = None
+                for attempt in range(self.max_retries + 1):
+                    response = client.post(url_channel, json={"recipient_id": user_id})
+                    if response.status_code == 200:
+                        channel_id = response.json()['id']
+                        break
+                    if response.status_code == 429:
+                        self._wait_for_rate_limit(response, attempt)
+                        continue
+                    return False, f"Channel Error: {response.status_code}"
+
+                if not channel_id:
+                    return False, "Rate Limit (kanał DM)"
+
+                msg_url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
+
+                # Losowanie wiadomości (Spintax)
+                final_msg = self.parse_spintax(message)
+
+                for attempt in range(self.max_retries + 1):
                     msg_resp = client.post(msg_url, json={"content": final_msg})
-                    return msg_resp.status_code == 200, "Success" if msg_resp.status_code == 200 else f"Code: {msg_resp.status_code}"
-                return False, f"Channel Error: {response.status_code}"
+                    if msg_resp.status_code == 200:
+                        return True, "Success"
+                    if msg_resp.status_code == 429:
+                        self._wait_for_rate_limit(msg_resp, attempt)
+                        continue
+                    return False, f"Code: {msg_resp.status_code}"
+
+                return False, "Rate Limit (wiadomość)"
             except Exception as e:
                 return False, str(e)
 

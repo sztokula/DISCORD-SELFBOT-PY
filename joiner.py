@@ -8,6 +8,25 @@ class DiscordJoiner:
         self.log = log_callback
         self.is_running = False
 
+    def _get_retry_after(self, response, default=5.0):
+        retry_header = response.headers.get("Retry-After")
+        if retry_header:
+            try:
+                return float(retry_header)
+            except ValueError:
+                pass
+        try:
+            data = response.json()
+        except Exception:
+            return default
+        retry_after = data.get("retry_after")
+        if retry_after is None:
+            return default
+        try:
+            return float(retry_after)
+        except (TypeError, ValueError):
+            return default
+
     def join_server(self, token, invite_code, proxy=None):
         """invite_code: tylko końcówka linku, np. 'fajny-serwer' z discord.gg/fajny-serwer"""
         # Czyścimy kod zaproszenia na wypadek gdyby ktoś wkleił cały link
@@ -22,19 +41,28 @@ class DiscordJoiner:
         
         proxies = {"all://": proxy} if proxy else None
         
+        max_retries = 3
+        backoff_factor = 1.5
+
         try:
             with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
-                response = client.post(url, json={})
-                if response.status_code == 200:
-                    return True, "Sukces"
-                elif response.status_code == 403:
-                    return False, "Wymagana weryfikacja (Captcha/Telefon)"
-                elif response.status_code == 429:
-                    return False, "Rate Limit (za szybko!)"
-                else:
-                    return False, f"Błąd {response.status_code}"
+                for attempt in range(max_retries + 1):
+                    response = client.post(url, json={})
+                    if response.status_code == 200:
+                        return True, "Sukces"
+                    elif response.status_code == 403:
+                        return False, "Wymagana weryfikacja (Captcha/Telefon)"
+                    elif response.status_code == 429:
+                        retry_after = self._get_retry_after(response)
+                        wait_time = retry_after * (backoff_factor ** attempt)
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        return False, f"Błąd {response.status_code}"
         except Exception as e:
             return False, str(e)
+
+        return False, "Rate Limit (po ponownych próbach)"
 
     def run_mass_join(self, invite_code):
         self.is_running = True
