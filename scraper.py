@@ -33,6 +33,18 @@ class DiscordScraper:
         wait_time = retry_after * (self.backoff_factor ** attempt)
         time.sleep(wait_time)
 
+    def _fetch_self_id(self, client):
+        response = client.get("https://discord.com/api/v9/users/@me")
+        if response.status_code != 200:
+            self.log(f"[Scraper] Nie udało się pobrać @me: {response.status_code}")
+            return None
+        try:
+            data = response.json()
+        except Exception:
+            self.log("[Scraper] Nie udało się odczytać odpowiedzi @me.")
+            return None
+        return data.get("id")
+
     def scrape_history(self, token, channel_id, limit=1000):
         """Pobiera ID użytkowników, którzy pisali na danym kanale."""
         self.is_scraping = True
@@ -47,6 +59,7 @@ class DiscordScraper:
         
         try:
             with httpx.Client(headers=headers, timeout=httpx.Timeout(10.0)) as client:
+                self_id = self._fetch_self_id(client)
                 while len(unique_ids) < limit and self.is_scraping:
                     params = {"limit": 100}
                     if last_msg_id:
@@ -73,8 +86,8 @@ class DiscordScraper:
                     
                     for msg in messages:
                         u_id = msg['author']['id']
-                        # Nie dodajemy botów ani samych siebie
-                        if not msg['author'].get('bot'):
+                        # Nie dodajemy botów ani własnego konta
+                        if not msg['author'].get('bot') and u_id != self_id:
                             unique_ids.add(u_id)
                         last_msg_id = msg['id']
                     
