@@ -61,6 +61,21 @@ class DatabaseManager:
         conn.close()
         return accounts
 
+    def reset_daily_counters(self, reference_datetime=None):
+        if reference_datetime is None:
+            reference_datetime = datetime.now()
+        reference_date = reference_datetime.strftime("%Y-%m-%d")
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE accounts
+            SET sent_today = 0
+            WHERE sent_today > 0
+              AND (last_use IS NULL OR date(last_use) < date(?))
+        ''', (reference_date,))
+        conn.commit()
+        conn.close()
+
     def add_targets(self, user_ids, platform):
         conn = self.get_connection()
         cursor = conn.cursor()

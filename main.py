@@ -15,6 +15,7 @@ class MassDMApp(ctk.CTk):
         super().__init__()
         
         self.db = DatabaseManager()
+        self.db.reset_daily_counters()
         self.log_queue = queue.Queue()
         self.worker = DiscordWorker(self.db, self.add_log)
         self.scraper = DiscordScraper(self.db, self.add_log)

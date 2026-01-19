@@ -107,6 +107,7 @@ class DiscordWorker:
     def run_mission(self, message, delay_min, delay_max, use_friend_req=False):
         self.is_running = True
         self.log("[Mission] Startujemy...")
+        self.db.reset_daily_counters()
         
         while self.is_running:
             accounts = self.db.get_active_accounts("discord")
