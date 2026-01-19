@@ -8,6 +8,7 @@ from discord_worker import DiscordWorker
 from scraper import DiscordScraper
 from status_changer import StatusChanger
 from joiner import DiscordJoiner # Import nowego modułu
+from token_manager import TokenManager
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -23,6 +24,7 @@ class MassDMApp(ctk.CTk):
         self.scraper = DiscordScraper(self.db, self.add_log)
         self.status_changer = StatusChanger(self.db, self.add_log)
         self.joiner = DiscordJoiner(self.db, self.add_log) # Inicjalizacja
+        self.token_manager = TokenManager(self.db, self.add_log)
 
         self.title("Mass-DM Farm Tool Pro v1.0")
         self.geometry("1100x1000") # Zwiększona wysokość na nową sekcję
@@ -113,7 +115,7 @@ class MassDMApp(ctk.CTk):
     def log_error(self, message):
         self.add_log(f"Błąd: {message}")
 
-    def validate_token(self, token):
+    def validate_token_format(self, token):
         if not token:
             self.log_error("Niepoprawny token: puste pole.")
             return False
@@ -174,12 +176,16 @@ class MassDMApp(ctk.CTk):
     def add_account(self):
         token = self.token_input.get().strip()
         proxy = self.proxy_input.get().strip()
-        if not self.validate_token(token):
+        if not self.validate_token_format(token):
             return
         if not self.validate_proxy(proxy):
             return
+        is_valid, info = self.token_manager.validate_token(token)
+        if not is_valid:
+            self.log_error(f"Token niepoprawny: {info}.")
+            return
         if self.db.add_account("discord", token, proxy):
-            self.add_log(f"Account added: {token[:15]}...")
+            self.add_log(f"Account added: {info}.")
             self.token_input.delete(0, 'end')
             self.proxy_input.delete(0, 'end')
         else:
@@ -198,7 +204,7 @@ class MassDMApp(ctk.CTk):
     def start_scraping(self):
         token = self.token_input.get().strip()
         channel_id = self.scrape_channel_input.get().strip()
-        if not self.validate_token(token):
+        if not self.validate_token_format(token):
             return
         if not self.is_valid_channel_id(channel_id):
             return
