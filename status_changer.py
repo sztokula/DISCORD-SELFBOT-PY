@@ -7,6 +7,32 @@ class StatusChanger:
         self.db = db_manager
         self.log = log_callback
         self.is_running = False
+        self.max_retries = 3
+        self.backoff_factor = 1.5
+
+    def _get_retry_after(self, response, default=5.0):
+        retry_header = response.headers.get("Retry-After")
+        if retry_header:
+            try:
+                return float(retry_header)
+            except ValueError:
+                pass
+        try:
+            data = response.json()
+        except Exception:
+            return default
+        retry_after = data.get("retry_after")
+        if retry_after is None:
+            return default
+        try:
+            return float(retry_after)
+        except (TypeError, ValueError):
+            return default
+
+    def _wait_for_rate_limit(self, response, attempt):
+        retry_after = self._get_retry_after(response)
+        wait_time = retry_after * (self.backoff_factor ** attempt)
+        time.sleep(wait_time)
 
     def change_status(self, token, status_type, custom_text, proxy=None):
         """
@@ -29,12 +55,18 @@ class StatusChanger:
         
         try:
             with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
-                response = client.patch(url, json=data)
-                if response.status_code == 200:
-                    return True
-                else:
+                for attempt in range(self.max_retries + 1):
+                    response = client.patch(url, json=data)
+                    if response.status_code == 200:
+                        return True
+                    if response.status_code == 429:
+                        self.log("[Status] Rate limit! Stosuję backoff...")
+                        self._wait_for_rate_limit(response, attempt)
+                        continue
                     self.log(f"[Status] Błąd {response.status_code} dla tokenu {token[:10]}...")
                     return False
+                self.log(f"[Status] Rate limit przekroczony dla tokenu {token[:10]}...")
+                return False
         except Exception as e:
             self.log(f"[Status] Wyjątek: {str(e)}")
             return False

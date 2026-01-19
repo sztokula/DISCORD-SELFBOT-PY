@@ -6,6 +6,32 @@ class DiscordScraper:
         self.db = db_manager
         self.log = log_callback
         self.is_scraping = False
+        self.max_retries = 3
+        self.backoff_factor = 1.5
+
+    def _get_retry_after(self, response, default=5.0):
+        retry_header = response.headers.get("Retry-After")
+        if retry_header:
+            try:
+                return float(retry_header)
+            except ValueError:
+                pass
+        try:
+            data = response.json()
+        except Exception:
+            return default
+        retry_after = data.get("retry_after")
+        if retry_after is None:
+            return default
+        try:
+            return float(retry_after)
+        except (TypeError, ValueError):
+            return default
+
+    def _wait_for_rate_limit(self, response, attempt):
+        retry_after = self._get_retry_after(response)
+        wait_time = retry_after * (self.backoff_factor ** attempt)
+        time.sleep(wait_time)
 
     def scrape_history(self, token, channel_id, limit=1000):
         """Pobiera ID użytkowników, którzy pisali na danym kanale."""
@@ -17,6 +43,7 @@ class DiscordScraper:
         
         unique_ids = set()
         last_msg_id = None
+        rate_limit_attempt = 0
         
         try:
             with httpx.Client(headers=headers, timeout=httpx.Timeout(10.0)) as client:
@@ -27,26 +54,32 @@ class DiscordScraper:
                     
                     response = client.get(url, params=params)
                     
-                    if response.status_code == 200:
-                        messages = response.json()
-                        if not messages:
+                    if response.status_code == 429:
+                        if rate_limit_attempt >= self.max_retries:
+                            self.log("[Scraper] Rate limit przekroczony. Kończę.")
                             break
-                        
-                        for msg in messages:
-                            u_id = msg['author']['id']
-                            # Nie dodajemy botów ani samych siebie
-                            if not msg['author'].get('bot'):
-                                unique_ids.add(u_id)
-                            last_msg_id = msg['id']
-                        
-                        self.log(f"[Scraper] Znaleziono unikalnych: {len(unique_ids)}...")
-                        time.sleep(1) # Delay, żeby nie dostać Rate Limit
-                    elif response.status_code == 429:
-                        self.log("[Scraper] Rate limit! Czekam 5 sekund...")
-                        time.sleep(5)
-                    else:
+                        self.log("[Scraper] Rate limit! Stosuję backoff...")
+                        self._wait_for_rate_limit(response, rate_limit_attempt)
+                        rate_limit_attempt += 1
+                        continue
+                    if response.status_code != 200:
                         self.log(f"[Scraper] Błąd: {response.status_code}")
                         break
+
+                    messages = response.json()
+                    rate_limit_attempt = 0
+                    if not messages:
+                        break
+                    
+                    for msg in messages:
+                        u_id = msg['author']['id']
+                        # Nie dodajemy botów ani samych siebie
+                        if not msg['author'].get('bot'):
+                            unique_ids.add(u_id)
+                        last_msg_id = msg['id']
+                    
+                    self.log(f"[Scraper] Znaleziono unikalnych: {len(unique_ids)}...")
+                    time.sleep(1) # Delay, żeby nie dostać Rate Limit
             
             # Zapis do bazy
             if unique_ids:
