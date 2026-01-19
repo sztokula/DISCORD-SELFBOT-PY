@@ -113,6 +113,7 @@ class DiscordWorker:
             accounts = self.db.get_active_accounts("discord")
             if not accounts: break
 
+            did_send_attempt = False
             for acc in accounts:
                 if not self.is_running: break
                 acc_id, _, token, proxy, _, limit, sent_today, _ = acc
@@ -126,6 +127,7 @@ class DiscordWorker:
                     return
 
                 t_id, u_id = target
+                did_send_attempt = True
                 success, msg = self.send_dm(token, u_id, message, proxy, use_friend_req)
                 
                 if success:
@@ -137,6 +139,10 @@ class DiscordWorker:
                     self.log(f"[!] Błąd {u_id}: {msg}")
 
                 time.sleep(random.randint(delay_min, delay_max))
+
+            if self.is_running and not did_send_attempt:
+                self.log("[Mission] Wszystkie konta mają dzienny limit. Uśpienie przed kolejną próbą.")
+                time.sleep(5)
 
     def stop(self):
         self.is_running = False
