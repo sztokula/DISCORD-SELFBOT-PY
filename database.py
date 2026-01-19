@@ -97,3 +97,10 @@ class DatabaseManager:
         ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), account_id))
         conn.commit()
         conn.close()
+
+    def update_account_status(self, account_id, status):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE accounts SET status = ? WHERE id = ?', (status, account_id))
+        conn.commit()
+        conn.close()
