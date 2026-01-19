@@ -1,13 +1,45 @@
+import base64
+import os
 import sqlite3
 from datetime import datetime
+
+from cryptography.fernet import Fernet, InvalidToken
 
 class DatabaseManager:
     def __init__(self, db_name="farm_tool.db"):
         self.db_name = db_name
+        self.fernet = self._init_fernet()
         self.init_db()
 
     def get_connection(self):
         return sqlite3.connect(self.db_name)
+
+    def _init_fernet(self):
+        key = os.getenv("TOKEN_ENCRYPTION_KEY")
+        if not key:
+            raise RuntimeError("Brak TOKEN_ENCRYPTION_KEY w zmiennych środowiskowych.")
+        try:
+            return Fernet(key)
+        except (ValueError, TypeError):
+            if len(key) == 32:
+                encoded_key = base64.urlsafe_b64encode(key.encode("utf-8"))
+                return Fernet(encoded_key)
+            raise RuntimeError("TOKEN_ENCRYPTION_KEY ma nieprawidłowy format.")
+
+    def _encrypt_token(self, token):
+        if token.startswith("enc:"):
+            return token
+        encrypted = self.fernet.encrypt(token.encode("utf-8")).decode("utf-8")
+        return f"enc:{encrypted}"
+
+    def _decrypt_token(self, token):
+        if not token.startswith("enc:"):
+            return token
+        encrypted = token[4:]
+        try:
+            return self.fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8")
+        except InvalidToken:
+            raise RuntimeError("Nieprawidłowy klucz szyfrowania tokenów.")
 
     def init_db(self):
         conn = self.get_connection()
@@ -25,6 +57,7 @@ class DatabaseManager:
                 last_use TIMESTAMP
             )
         ''')
+        self.migrate_plaintext_tokens(conn)
         # Tabela celów
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS targets (
@@ -38,14 +71,25 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
+    def migrate_plaintext_tokens(self, conn):
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, token FROM accounts")
+        rows = cursor.fetchall()
+        for acc_id, token in rows:
+            if not token or token.startswith("enc:"):
+                continue
+            encrypted = self._encrypt_token(token)
+            cursor.execute("UPDATE accounts SET token = ? WHERE id = ?", (encrypted, acc_id))
+
     def add_account(self, platform, token, proxy="", limit=15):
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
+            encrypted_token = self._encrypt_token(token)
             cursor.execute('''
                 INSERT INTO accounts (platform, token, proxy, daily_limit)
                 VALUES (?, ?, ?, ?)
-            ''', (platform, token, proxy, limit))
+            ''', (platform, encrypted_token, proxy, limit))
             conn.commit()
             return True
         except sqlite3.IntegrityError:
@@ -57,7 +101,11 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM accounts WHERE platform = ? AND status = "Active"', (platform,))
-        accounts = cursor.fetchall()
+        accounts = []
+        for acc in cursor.fetchall():
+            acc_list = list(acc)
+            acc_list[2] = self._decrypt_token(acc_list[2])
+            accounts.append(tuple(acc_list))
         conn.close()
         return accounts
 
