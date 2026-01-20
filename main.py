@@ -1230,13 +1230,18 @@ class MassDMApp(ctk.CTk):
             self.log_error("Invalid token: empty field.")
             self._set_input_valid(input_widget, False)
             return False
-        token_pattern = re.compile(r"^[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+$")
-        if not token_pattern.match(token) or len(token) < 50:
+        if not self._is_token_format_valid(token):
             self.log_error("Invalid token format.")
             self._set_input_valid(input_widget, False)
             return False
         self._set_input_valid(input_widget, True)
         return True
+
+    def _is_token_format_valid(self, token):
+        if not token:
+            return False
+        token_pattern = re.compile(r"^[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+$")
+        return bool(token_pattern.match(token) and len(token) >= 50)
 
     def validate_proxy(self, proxy, input_widget=None):
         if not proxy:
@@ -1257,6 +1262,49 @@ class MassDMApp(ctk.CTk):
         self.log_error("Invalid proxy format.")
         self._set_input_valid(input_widget, False)
         return False
+
+    def _parse_tokens_from_text(self, raw_text):
+        tokens = []
+        invalid = []
+        for line in raw_text.splitlines():
+            value = line.strip()
+            if not value:
+                continue
+            if self._is_token_format_valid(value):
+                tokens.append(value)
+            else:
+                invalid.append(value)
+        unique_tokens = list(dict.fromkeys(tokens))
+        return unique_tokens, invalid
+
+    def _parse_tokens_from_file(self, file_path):
+        try:
+            raw_text = Path(file_path).read_text(encoding="utf-8")
+        except OSError as exc:
+            self.log_error(f"Unable to read file: {exc}")
+            return [], []
+        return self._parse_tokens_from_text(raw_text)
+
+    def _parse_proxies_from_text(self, raw_text):
+        proxies = []
+        invalid = []
+        for line in raw_text.splitlines():
+            value = line.strip()
+            if not value:
+                continue
+            if self._is_proxy_format_valid(value):
+                proxies.append(value)
+            else:
+                invalid.append(value)
+        return proxies, invalid
+
+    def _parse_proxies_from_file(self, file_path):
+        try:
+            raw_text = Path(file_path).read_text(encoding="utf-8")
+        except OSError as exc:
+            self.log_error(f"Unable to read file: {exc}")
+            return [], []
+        return self._parse_proxies_from_text(raw_text)
 
     def normalize_invite(self, invite):
         invite = invite.strip()
@@ -1422,10 +1470,7 @@ class MassDMApp(ctk.CTk):
         proxy = self.proxy_input.get().strip()
         dm_limit_raw = self.dm_limit_input.get().strip()
         join_limit_raw = self.join_limit_input.get().strip()
-        if self._is_proxy_required() and not proxy:
-            self.log_error("Proxy is required.")
-            self._set_input_valid(self.proxy_input, False)
-            return
+        proxy_missing = self._is_proxy_required() and not proxy
         if not self.validate_token_format(token, self.token_input):
             return
         if not self.validate_proxy(proxy, self.proxy_input):
@@ -1451,6 +1496,15 @@ class MassDMApp(ctk.CTk):
             return
         self._set_input_valid(self.dm_limit_input, True)
         self._set_input_valid(self.join_limit_input, True)
+        if proxy_missing:
+            account_id = self.db.add_account("discord", token, "", dm_limit, join_limit, "Unverified")
+            if not account_id:
+                self.log_error("Account already exists or token is invalid.")
+                return
+            self.log_warning("Account added without proxy. Assign a proxy to activate.")
+            self._reset_add_account_form()
+            self.refresh_accounts_overview()
+            return
         self.add_acc_btn.configure(state="disabled")
         thread = threading.Thread(
             target=self._add_account_worker,
@@ -1545,6 +1599,72 @@ class MassDMApp(ctk.CTk):
         self._set_input_valid(self.proxy_input, True)
         self._set_input_valid(self.dm_limit_input, True)
         self._set_input_valid(self.join_limit_input, True)
+
+    def _assign_proxies_to_empty_accounts(self, proxies):
+        if not proxies:
+            self.log_error("No valid proxies to assign.")
+            return 0, 0, 0
+        missing_ids = self.db.get_accounts_missing_proxy("discord")
+        if not missing_ids:
+            self.log_error("No accounts without proxy.")
+            return 0, len(proxies), 0
+        assign_count = min(len(proxies), len(missing_ids))
+        for acc_id, proxy in zip(missing_ids, proxies):
+            self.db.update_account_proxy(acc_id, proxy)
+        return assign_count, len(proxies) - assign_count, len(missing_ids) - assign_count
+
+    def import_tokens_from_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Select a .txt file with tokens",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+        tokens, invalid = self._parse_tokens_from_file(file_path)
+        if not tokens:
+            self.log_error("No valid tokens in file.")
+            return
+        dm_limit = self._parse_min_value(self.dm_limit_input, "DM daily limit", cast_type=int, min_value=1)
+        if dm_limit is None:
+            return
+        join_limit = self._parse_min_value(self.join_limit_input, "Join daily limit", cast_type=int, min_value=1)
+        if join_limit is None:
+            return
+        status = "Unverified" if self._is_proxy_required() else "Active"
+        added = 0
+        skipped = 0
+        for token in tokens:
+            account_id = self.db.add_account("discord", token, "", dm_limit, join_limit, status)
+            if account_id:
+                added += 1
+            else:
+                skipped += 1
+        if invalid:
+            self.log_warning(f"Invalid tokens (skipping): {', '.join(invalid[:10])}" + ("..." if len(invalid) > 10 else ""))
+        self.add_log(f"[Accounts] Imported {added} token(s) from file. Skipped: {skipped}.")
+        self.refresh_accounts_overview()
+
+    def import_proxies_from_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Select a .txt file with proxies",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+        proxies, invalid = self._parse_proxies_from_file(file_path)
+        if not proxies:
+            self.log_error("No valid proxies in file.")
+            return
+        assigned, unused, remaining = self._assign_proxies_to_empty_accounts(proxies)
+        if invalid:
+            self.log_warning(f"Invalid proxies (skipping): {', '.join(invalid[:10])}" + ("..." if len(invalid) > 10 else ""))
+        if assigned:
+            self.add_log(f"[Proxy] Assigned {assigned} proxy/proxies to empty accounts.")
+        if remaining:
+            self.log_warning(f"[Proxy] {remaining} account(s) still without proxy.")
+        if unused:
+            self.log_warning(f"[Proxy] {unused} proxy/proxies unused.")
+        self.refresh_accounts_overview()
 
     def _get_invite_list(self, raw_text=None, log_invalid=True):
         if raw_text is None:
@@ -2544,6 +2664,34 @@ class MassDMApp(ctk.CTk):
             command=self.on_export_plaintext_toggle,
         )
         self.export_banlist_plaintext_toggle.grid(row=12, column=0, columnspan=2, padx=10, pady=(5, 0), sticky="w")
+
+        self.bulk_import_frame = ctk.CTkFrame(self.acc_frame, fg_color="transparent")
+        self.bulk_import_frame.grid(row=13, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="ew")
+        self.bulk_import_frame.grid_columnconfigure(0, weight=1)
+        self.bulk_import_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(
+            self.bulk_import_frame,
+            text="Bulk Import (.txt)",
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        self.import_tokens_btn = ctk.CTkButton(
+            self.bulk_import_frame,
+            text="Import Tokens (.txt)",
+            command=self.import_tokens_from_file,
+        )
+        self.import_tokens_btn.grid(row=1, column=0, padx=(0, 10), pady=5, sticky="w")
+        self.import_proxies_btn = ctk.CTkButton(
+            self.bulk_import_frame,
+            text="Import Proxies (.txt)",
+            command=self.import_proxies_from_file,
+        )
+        self.import_proxies_btn.grid(row=1, column=1, padx=(0, 10), pady=5, sticky="w")
+        self.bulk_import_hint = ctk.CTkLabel(
+            self.bulk_import_frame,
+            text="Proxies fill accounts without proxy (by ID order).",
+            text_color="#8a8a8a",
+        )
+        self.bulk_import_hint.grid(row=2, column=0, columnspan=2, sticky="w")
 
         self.acc_overview_frame = ctk.CTkFrame(parent)
         self.acc_overview_frame.pack(fill="x", pady=10)

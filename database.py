@@ -453,6 +453,41 @@ class DatabaseManager:
         if token_to_export:
             self._append_banned_dead_token(token_to_export)
 
+    def update_account_proxy(self, account_id, proxy):
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE accounts SET proxy = ? WHERE id = ?", (proxy, account_id))
+            conn.commit()
+            conn.close()
+
+    def get_accounts_missing_proxy(self, platform=None):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        if platform:
+            cursor.execute(
+                '''
+                SELECT id
+                FROM accounts
+                WHERE platform = ?
+                  AND (proxy IS NULL OR TRIM(proxy) = "")
+                ORDER BY id ASC
+                ''',
+                (platform,),
+            )
+        else:
+            cursor.execute(
+                '''
+                SELECT id
+                FROM accounts
+                WHERE proxy IS NULL OR TRIM(proxy) = ""
+                ORDER BY id ASC
+                '''
+            )
+        rows = cursor.fetchall()
+        conn.close()
+        return [row[0] for row in rows]
+
     def _append_banned_dead_token(self, token, export_path="banned_dead_tokens.txt"):
         if not token:
             return
