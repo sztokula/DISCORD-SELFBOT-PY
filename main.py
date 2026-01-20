@@ -1277,14 +1277,10 @@ class MassDMApp(ctk.CTk):
         ctk.CTkLabel(self.scrape_frame, text="Scraping Tools", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
         self.scrape_channel_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Channel ID", width=220)
         self.scrape_channel_input.grid(row=1, column=0, padx=10, pady=5, sticky="w")
-        self.scrape_server_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Server", width=180)
-        self.scrape_server_input.grid(row=1, column=1, padx=10, pady=5, sticky="w")
-        self.scrape_server_id_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Server ID", width=180)
-        self.scrape_server_id_input.grid(row=1, column=2, padx=10, pady=5, sticky="w")
         self.scrape_range_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Range (limit)", width=140)
-        self.scrape_range_input.grid(row=1, column=3, padx=10, pady=5, sticky="w")
+        self.scrape_range_input.grid(row=1, column=1, padx=10, pady=5, sticky="w")
         self.scrape_btn = ctk.CTkButton(self.scrape_frame, text="Scrape Users", command=self.start_scraping)
-        self.scrape_btn.grid(row=1, column=4, padx=10, pady=5)
+        self.scrape_btn.grid(row=1, column=2, padx=10, pady=5)
         self.scrape_guild_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Guild ID", width=350)
         self.scrape_guild_input.grid(row=2, column=0, padx=10, pady=5, columnspan=2, sticky="w")
         self.scrape_guild_btn = ctk.CTkButton(
@@ -1356,6 +1352,11 @@ class MassDMApp(ctk.CTk):
 if __name__ == "__main__":
     app = MassDMApp()
     app.mainloop()
+
+
+
+
+
 
 
 
