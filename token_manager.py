@@ -3,9 +3,10 @@ import time
 import httpx
 
 class TokenManager:
-    def __init__(self, db_manager, log_callback):
+    def __init__(self, db_manager, log_callback, metrics=None):
         self.db = db_manager
         self.log = log_callback
+        self.metrics = metrics
         self.max_validation_retries = 2
         self.retry_backoff_seconds = 2.0
 
@@ -15,9 +16,14 @@ class TokenManager:
         proxies = {"all://": proxy} if proxy else None
         try:
             with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+                start = time.monotonic()
                 response = client.get(url)
         except Exception as exc:
             return "retry", f"Network error: {exc}"
+        finally:
+            if self.metrics:
+                duration = time.monotonic() - start if "start" in locals() else 0.0
+                self.metrics.record_request(duration, rate_limited=False)
 
         if response.status_code == 200:
             try:

@@ -4,14 +4,21 @@ import random
 import re
 
 class DiscordWorker:
-    def __init__(self, db_manager, log_callback):
+    def __init__(self, db_manager, log_callback, metrics=None):
         self.db = db_manager
         self.log = log_callback
+        self.metrics = metrics
         self.is_running = False
         self.max_retries = 3
         self.backoff_factor = 1.5
         self.default_tags = ["#promo", "#info", "#discord", "#community", "#support"]
         self.default_emojis = ["🔥", "✨", "✅", "🚀", "🎉", "💬", "🧩", "🌟"]
+
+    def _record_request(self, duration, response=None):
+        if not self.metrics:
+            return
+        rate_limited = response is not None and response.status_code == 429
+        self.metrics.record_request(duration, rate_limited=rate_limited)
 
     def parse_spintax(self, text):
         """Zamienia {opcja1|opcja2} na losową opcję."""
@@ -66,7 +73,9 @@ class DiscordWorker:
         """Opcjonalna funkcja wysyłania zaproszenia do znajomych."""
         url = f"https://discord.com/api/v9/users/{user_id}/relationships"
         try:
+            start = time.monotonic()
             resp = client.put(url, json={})
+            self._record_request(time.monotonic() - start, resp)
             return resp.status_code == 204
         except Exception as e:
             self.log(f"[Friend Request] Exception for user {user_id}: {e}")
@@ -156,7 +165,9 @@ class DiscordWorker:
                 url_channel = "https://discord.com/api/v9/users/@me/channels"
                 channel_id = None
                 for attempt in range(self.max_retries + 1):
+                    start = time.monotonic()
                     response = client.post(url_channel, json={"recipient_id": user_id})
+                    self._record_request(time.monotonic() - start, response)
                     if response.status_code == 401:
                         token, refreshed = self._handle_unauthorized(client, account_id, token, refreshed)
                         if token:
@@ -179,7 +190,9 @@ class DiscordWorker:
                 final_msg = self.render_message(message_template)
 
                 for attempt in range(self.max_retries + 1):
+                    start = time.monotonic()
                     msg_resp = client.post(msg_url, json={"content": final_msg})
+                    self._record_request(time.monotonic() - start, msg_resp)
                     if msg_resp.status_code == 401:
                         token, refreshed = self._handle_unauthorized(client, account_id, token, refreshed)
                         if token:
@@ -196,7 +209,17 @@ class DiscordWorker:
             except Exception as e:
                 return False, str(e)
 
-    def run_mission(self, message_templates, delay_min, delay_max, use_friend_req=False, friend_delay_min=0, friend_delay_max=0):
+    def run_mission(
+        self,
+        message_templates,
+        delay_min,
+        delay_max,
+        use_friend_req=False,
+        friend_delay_min=0,
+        friend_delay_max=0,
+        account_min_interval_seconds=0,
+        target_min_interval_seconds=0,
+    ):
         self.is_running = True
         self.log("[Mission] Startujemy...")
         self.db.reset_daily_counters()
@@ -212,7 +235,15 @@ class DiscordWorker:
                 
                 if sent_today >= limit: continue
 
-                target = self.db.get_next_target("discord")
+                if account_min_interval_seconds > 0:
+                    remaining = self.db.get_account_dm_cooldown(acc_id, account_min_interval_seconds)
+                    if remaining > 0:
+                        self.log(f"[Mission] Konto {acc_id}: czekam {remaining:.1f}s (cooldown).")
+                        self._sleep_with_stop(remaining)
+                        if not self.is_running:
+                            break
+
+                target = self.db.get_next_target("discord", min_target_interval_seconds=target_min_interval_seconds)
                 if not target:
                     self.log("[System] Brak celów w bazie.")
                     self.is_running = False
@@ -235,6 +266,7 @@ class DiscordWorker:
                 if success:
                     self.db.update_target_status(t_id, "Sent")
                     self.db.increment_sent_counter(acc_id)
+                    self.db.record_last_dm(acc_id, u_id)
                     self.log(f"[OK] DM wysłany do {u_id}")
                 else:
                     self.db.update_target_status(t_id, "Failed", msg)
