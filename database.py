@@ -233,9 +233,26 @@ class DatabaseManager:
         with self.write_lock:
             conn = self.get_connection()
             cursor = conn.cursor()
+            token_to_export = None
+            if status == "Banned/Dead":
+                cursor.execute("SELECT token FROM accounts WHERE id = ?", (account_id,))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    token_to_export = self._decrypt_token(row[0])
             cursor.execute('UPDATE accounts SET status = ? WHERE id = ?', (status, account_id))
             conn.commit()
             conn.close()
+        if token_to_export:
+            self._append_banned_dead_token(token_to_export)
+
+    def _append_banned_dead_token(self, token, export_path="banned_dead_tokens.txt"):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"{timestamp}\t{token}\n"
+        try:
+            with open(export_path, "a", encoding="utf-8") as handle:
+                handle.write(line)
+        except OSError:
+            pass
 
     def get_accounts_overview(self):
         conn = self.get_connection()
