@@ -604,8 +604,60 @@ class MassDMApp(ctk.CTk):
 
     def close_settings_window(self):
         if self.settings_window and self.settings_window.winfo_exists():
+            self.save_delay_settings()
             self.settings_window.destroy()
         self.settings_window = None
+
+    def save_delay_settings(self):
+        dm_delay = self._parse_delay_range(
+            self.dm_delay_min_input,
+            self.dm_delay_max_input,
+            "DM delay",
+            cast_type=int,
+            min_value=0,
+        )
+        if not dm_delay:
+            return
+        join_delay = self._parse_delay_range(
+            self.join_delay_min_input,
+            self.join_delay_max_input,
+            "Join delay",
+            cast_type=int,
+            min_value=0,
+        )
+        if not join_delay:
+            return
+        friend_delay = self._parse_delay_range(
+            self.friend_delay_min_input,
+            self.friend_delay_max_input,
+            "Friend request delay",
+            cast_type=int,
+            min_value=0,
+        )
+        if not friend_delay:
+            return
+        status_delay = self._parse_delay_range(
+            self.status_delay_min_input,
+            self.status_delay_max_input,
+            "Status delay (hours)",
+            cast_type=float,
+            min_value=0.1,
+        )
+        if not status_delay:
+            return
+        dm_delay_min, dm_delay_max = dm_delay
+        join_delay_min, join_delay_max = join_delay
+        friend_delay_min, friend_delay_max = friend_delay
+        status_delay_min, status_delay_max = status_delay
+        self.db.set_setting("dm_delay_min", str(dm_delay_min))
+        self.db.set_setting("dm_delay_max", str(dm_delay_max))
+        self.db.set_setting("join_delay_min", str(join_delay_min))
+        self.db.set_setting("join_delay_max", str(join_delay_max))
+        self.db.set_setting("friend_delay_min", str(friend_delay_min))
+        self.db.set_setting("friend_delay_max", str(friend_delay_max))
+        self.db.set_setting("status_delay_min_hours", str(status_delay_min))
+        self.db.set_setting("status_delay_max_hours", str(status_delay_max))
+        self.add_log("[Settings] Zapisano ustawienia delay.")
 
     def _build_settings_sections(self, parent):
         # 1. SEKCA KONFIGURACJI (Konta + Proxy)
@@ -698,6 +750,8 @@ class MassDMApp(ctk.CTk):
         self.status_delay_max_input = ctk.CTkEntry(self.delay_frame, width=120)
         self.status_delay_max_input.grid(row=4, column=2, padx=10, pady=5, sticky="w")
         self.status_delay_max_input.insert(0, str(status_delay_max))
+        self.delay_save_btn = ctk.CTkButton(self.delay_frame, text="Save Delays", command=self.save_delay_settings)
+        self.delay_save_btn.grid(row=5, column=0, padx=10, pady=10, sticky="w")
 
         # 2. SEKCJA JOINERA (NOWOŚĆ)
         self.joiner_frame = ctk.CTkFrame(parent)
