@@ -374,6 +374,22 @@ class MassDMApp(ctk.CTk):
         self._template_editing = False
         self._refresh_template_counters()
 
+    def _show_template_help(self):
+        message = (
+            "Templates support tokens and basic Discord formatting.\n\n"
+            "Tokens:\n"
+            "- [[tag]] or [[tag:promo,info]] selects a random tag.\n"
+            "- [[emoji]] or [[emoji:smile,fire]] selects a random emoji.\n"
+            "- [[num]] or [[num:1-99]] selects a random number.\n\n"
+            "Spintax:\n"
+            "- {hello|hi|hey} picks one option.\n\n"
+            "Discord formatting examples:\n"
+            "- **bold**, *italic*, __underline__, ~~strike~~\n"
+            "- `inline code` or ```code block```\n"
+            "- > quote, @mentions, #channels, links"
+        )
+        messagebox.showinfo("Template help", message)
+
     def _refresh_template_counters(self):
         if not hasattr(self, "template_boxes"):
             return
@@ -1719,12 +1735,22 @@ class MassDMApp(ctk.CTk):
         self.msg_frame = ctk.CTkFrame(parent)
         self.msg_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.msg_frame, text="Message Templates", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=5)
+        info_row = ctk.CTkFrame(self.msg_frame, fg_color="transparent")
+        info_row.pack(fill="x", padx=20, pady=(0, 5))
         ctk.CTkLabel(
-            self.msg_frame,
+            info_row,
             text="One tab = one template. Tokens: [[tag]], [[emoji]], [[num]], [[num:1-99]] | Spintax: {a|b}",
             font=ctk.CTkFont(size=12),
             text_color="#b0b0b0",
-        ).pack(pady=(0, 5))
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(
+            info_row,
+            text="?",
+            width=28,
+            height=24,
+            command=self._show_template_help,
+        ).pack(side="right")
         self.template_tabs = ctk.CTkTabview(self.msg_frame, command=self._on_template_tab_changed)
         self.template_tabs.pack(fill="x", padx=20, pady=10)
         self.template_boxes = []
