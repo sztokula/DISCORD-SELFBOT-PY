@@ -290,6 +290,26 @@ class MassDMApp(ctk.CTk):
             return None
         return value
 
+    def _parse_delay_range_from_settings(self, min_key, max_key, label, cast_type=int, min_value=0.0):
+        min_val = self._get_setting_number(min_key, None)
+        max_val = self._get_setting_number(max_key, None)
+        if min_val is None or max_val is None:
+            self.log_error(f"{label} nie jest ustawione. OtwĂłrz ustawienia.")
+            return None
+        try:
+            min_val = cast_type(min_val)
+            max_val = cast_type(max_val)
+        except (TypeError, ValueError):
+            self.log_error(f"{label} ma niepoprawny format.")
+            return None
+        if min_val < min_value or max_val < min_value:
+            self.log_error(f"{label} musi byÄ‡ >= {min_value}.")
+            return None
+        if min_val > max_val:
+            self.log_error(f"{label} min nie moĹĽe byÄ‡ wiÄ™kszy od max.")
+            return None
+        return min_val, max_val
+
     def _count_templates(self):
         raw = self._get_message_templates_raw()
         if not raw:
@@ -1002,13 +1022,22 @@ class MassDMApp(ctk.CTk):
         if not invites:
             self.log_error("Brak zapisanych zaproszeĹ„. OtwĂłrz ustawienia i zapisz listÄ™ serwerĂłw.")
             return False
-        join_delay = self._parse_delay_range(
-            self.join_delay_min_input,
-            self.join_delay_max_input,
-            "Join delay",
-            cast_type=int,
-            min_value=0,
-        )
+        if hasattr(self, "join_delay_min_input") and self.join_delay_min_input.winfo_exists():
+            join_delay = self._parse_delay_range(
+                self.join_delay_min_input,
+                self.join_delay_max_input,
+                "Join delay",
+                cast_type=int,
+                min_value=0,
+            )
+        else:
+            join_delay = self._parse_delay_range_from_settings(
+                "join_delay_min",
+                "join_delay_max",
+                "Join delay",
+                cast_type=int,
+                min_value=0,
+            )
         if not join_delay:
             return False
         join_delay_min, join_delay_max = join_delay
@@ -1025,6 +1054,9 @@ class MassDMApp(ctk.CTk):
     def start_scraping(self, on_complete=None):
         if not self.module_vars["scraper"].get():
             self.log_error("Moduł Scraper jest wyłączony.")
+            return False
+        if not hasattr(self, "token_input") or not self.token_input.winfo_exists():
+            self.log_error("Otwórz ustawienia i wprowadź token do scrapowania.")
             return False
         token = self.token_input.get().strip()
         channel_id = self.scrape_channel_input.get().strip()
@@ -1047,6 +1079,9 @@ class MassDMApp(ctk.CTk):
     def start_guild_scraping(self, on_complete=None):
         if not self.module_vars["scraper"].get():
             self.log_error("Moduł Scraper jest wyłączony.")
+            return False
+        if not hasattr(self, "token_input") or not self.token_input.winfo_exists():
+            self.log_error("Otwórz ustawienia i wprowadź token do scrapowania.")
             return False
         token = self.token_input.get().strip()
         guild_id = self.scrape_guild_input.get().strip()
@@ -1107,22 +1142,40 @@ class MassDMApp(ctk.CTk):
         if not templates:
             self.log_error("Brak poprawnych szablonĂłw wiadomoĹ›ci.")
             return
-        dm_delay = self._parse_delay_range(
-            self.dm_delay_min_input,
-            self.dm_delay_max_input,
-            "DM delay",
-            cast_type=int,
-            min_value=0,
-        )
+        if hasattr(self, "dm_delay_min_input") and self.dm_delay_min_input.winfo_exists():
+            dm_delay = self._parse_delay_range(
+                self.dm_delay_min_input,
+                self.dm_delay_max_input,
+                "DM delay",
+                cast_type=int,
+                min_value=0,
+            )
+        else:
+            dm_delay = self._parse_delay_range_from_settings(
+                "dm_delay_min",
+                "dm_delay_max",
+                "DM delay",
+                cast_type=int,
+                min_value=0,
+            )
         if not dm_delay:
             return
-        friend_delay = self._parse_delay_range(
-            self.friend_delay_min_input,
-            self.friend_delay_max_input,
-            "Friend request delay",
-            cast_type=int,
-            min_value=0,
-        )
+        if hasattr(self, "friend_delay_min_input") and self.friend_delay_min_input.winfo_exists():
+            friend_delay = self._parse_delay_range(
+                self.friend_delay_min_input,
+                self.friend_delay_max_input,
+                "Friend request delay",
+                cast_type=int,
+                min_value=0,
+            )
+        else:
+            friend_delay = self._parse_delay_range_from_settings(
+                "friend_delay_min",
+                "friend_delay_max",
+                "Friend request delay",
+                cast_type=int,
+                min_value=0,
+            )
         if not friend_delay:
             return
         account_min_interval = self._parse_min_value(
@@ -1420,13 +1473,22 @@ class MassDMApp(ctk.CTk):
         )
         if not friend_delay:
             return
-        status_delay = self._parse_delay_range(
-            self.status_delay_min_input,
-            self.status_delay_max_input,
-            "Status delay (hours)",
-            cast_type=float,
-            min_value=0.1,
-        )
+        if hasattr(self, "status_delay_min_input") and self.status_delay_min_input.winfo_exists():
+            status_delay = self._parse_delay_range(
+                self.status_delay_min_input,
+                self.status_delay_max_input,
+                "Status delay (hours)",
+                cast_type=float,
+                min_value=0.1,
+            )
+        else:
+            status_delay = self._parse_delay_range_from_settings(
+                "status_delay_min_hours",
+                "status_delay_max_hours",
+                "Status delay (hours)",
+                cast_type=float,
+                min_value=0.1,
+            )
         if not status_delay:
             return
         account_interval = self._parse_min_value(
