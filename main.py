@@ -207,7 +207,6 @@ class MassDMApp(ctk.CTk):
 
         self.after(100, self.process_log_queue)
         self.after(1000, self.refresh_health_metrics)
-        self.open_settings_window()
 
     def add_log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
