@@ -133,6 +133,36 @@ class MassDMApp(ctk.CTk):
     def _set_setting_bool(self, key, value):
         self.db.set_setting(key, "true" if value else "false")
 
+    def _get_setting_number(self, key, default):
+        value = self.db.get_setting(key, None)
+        if value in (None, ""):
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _parse_delay_range(self, min_input, max_input, label, cast_type=int, min_value=0.0):
+        min_raw = min_input.get().strip()
+        max_raw = max_input.get().strip()
+        try:
+            min_val = cast_type(min_raw)
+        except (TypeError, ValueError):
+            self.log_error(f"{label} (min) musi być liczbą.")
+            return None
+        try:
+            max_val = cast_type(max_raw)
+        except (TypeError, ValueError):
+            self.log_error(f"{label} (max) musi być liczbą.")
+            return None
+        if min_val < min_value or max_val < min_value:
+            self.log_error(f"{label} musi być >= {min_value}.")
+            return None
+        if min_val > max_val:
+            self.log_error(f"{label} min nie może być większy od max.")
+            return None
+        return min_val, max_val
+
     def validate_token_format(self, token):
         if not token:
             self.log_error("Niepoprawny token: puste pole.")
@@ -285,7 +315,19 @@ class MassDMApp(ctk.CTk):
         if not invites:
             self.log_error("Brak poprawnych zaproszeń.")
             return
-        thread = threading.Thread(target=self.joiner.run_mass_join, args=(invites,))
+        join_delay = self._parse_delay_range(
+            self.join_delay_min_input,
+            self.join_delay_max_input,
+            "Join delay",
+            cast_type=int,
+            min_value=0,
+        )
+        if not join_delay:
+            return
+        join_delay_min, join_delay_max = join_delay
+        self.db.set_setting("join_delay_min", str(join_delay_min))
+        self.db.set_setting("join_delay_max", str(join_delay_max))
+        thread = threading.Thread(target=self.joiner.run_mass_join, args=(invites, join_delay_min, join_delay_max))
         thread.daemon = True
         thread.start()
 
@@ -323,18 +365,21 @@ class MassDMApp(ctk.CTk):
             return
         status_type = self.status_type_var.get()
         custom_text = self.status_text_input.get()
-        interval_raw = self.status_interval_input.get().strip()
-        try:
-            interval_hours = float(interval_raw)
-        except ValueError:
-            self.log_error("Interwał statusu musi być liczbą (godziny).")
+        status_delay = self._parse_delay_range(
+            self.status_delay_min_input,
+            self.status_delay_max_input,
+            "Status delay (hours)",
+            cast_type=float,
+            min_value=0.1,
+        )
+        if not status_delay:
             return
-        if interval_hours <= 0:
-            self.log_error("Interwał statusu musi być większy od zera.")
-            return
+        status_delay_min, status_delay_max = status_delay
+        self.db.set_setting("status_delay_min_hours", str(status_delay_min))
+        self.db.set_setting("status_delay_max_hours", str(status_delay_max))
         thread = threading.Thread(
             target=self.status_changer.run_auto_update,
-            args=(status_type, custom_text, interval_hours),
+            args=(status_type, custom_text, status_delay_min, status_delay_max),
         )
         thread.daemon = True
         thread.start()
@@ -355,8 +400,35 @@ class MassDMApp(ctk.CTk):
         if not templates:
             self.log_error("Brak poprawnych szablonów wiadomości.")
             return
+        dm_delay = self._parse_delay_range(
+            self.dm_delay_min_input,
+            self.dm_delay_max_input,
+            "DM delay",
+            cast_type=int,
+            min_value=0,
+        )
+        if not dm_delay:
+            return
+        friend_delay = self._parse_delay_range(
+            self.friend_delay_min_input,
+            self.friend_delay_max_input,
+            "Friend request delay",
+            cast_type=int,
+            min_value=0,
+        )
+        if not friend_delay:
+            return
+        dm_delay_min, dm_delay_max = dm_delay
+        friend_delay_min, friend_delay_max = friend_delay
+        self.db.set_setting("dm_delay_min", str(dm_delay_min))
+        self.db.set_setting("dm_delay_max", str(dm_delay_max))
+        self.db.set_setting("friend_delay_min", str(friend_delay_min))
+        self.db.set_setting("friend_delay_max", str(friend_delay_max))
         use_friend_req = self.friend_request_var.get()
-        thread = threading.Thread(target=self.worker.run_mission, args=(templates, 5, 10, use_friend_req))
+        thread = threading.Thread(
+            target=self.worker.run_mission,
+            args=(templates, dm_delay_min, dm_delay_max, use_friend_req, friend_delay_min, friend_delay_max),
+        )
         thread.daemon = True
         thread.start()
 
@@ -582,6 +654,51 @@ class MassDMApp(ctk.CTk):
         self.captcha_toggle = ctk.CTkCheckBox(self.module_frame, text="Captcha Module", variable=self.module_vars["captcha"], command=self.on_module_toggle)
         self.captcha_toggle.grid(row=3, column=0, padx=10, pady=5, sticky="w")
 
+        self.delay_frame = ctk.CTkFrame(parent)
+        self.delay_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(self.delay_frame, text="Delay Settings", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=4, pady=10)
+
+        dm_delay_min = int(self._get_setting_number("dm_delay_min", 5))
+        dm_delay_max = int(self._get_setting_number("dm_delay_max", 10))
+        join_delay_min = int(self._get_setting_number("join_delay_min", 10))
+        join_delay_max = int(self._get_setting_number("join_delay_max", 30))
+        friend_delay_min = int(self._get_setting_number("friend_delay_min", 2))
+        friend_delay_max = int(self._get_setting_number("friend_delay_max", 5))
+        status_delay_min = self._get_setting_number("status_delay_min_hours", 3.0)
+        status_delay_max = self._get_setting_number("status_delay_max_hours", 3.0)
+
+        ctk.CTkLabel(self.delay_frame, text="DM delay (s) min/max").grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.dm_delay_min_input = ctk.CTkEntry(self.delay_frame, width=120)
+        self.dm_delay_min_input.grid(row=1, column=1, padx=10, pady=5, sticky="w")
+        self.dm_delay_min_input.insert(0, str(dm_delay_min))
+        self.dm_delay_max_input = ctk.CTkEntry(self.delay_frame, width=120)
+        self.dm_delay_max_input.grid(row=1, column=2, padx=10, pady=5, sticky="w")
+        self.dm_delay_max_input.insert(0, str(dm_delay_max))
+
+        ctk.CTkLabel(self.delay_frame, text="Join delay (s) min/max").grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.join_delay_min_input = ctk.CTkEntry(self.delay_frame, width=120)
+        self.join_delay_min_input.grid(row=2, column=1, padx=10, pady=5, sticky="w")
+        self.join_delay_min_input.insert(0, str(join_delay_min))
+        self.join_delay_max_input = ctk.CTkEntry(self.delay_frame, width=120)
+        self.join_delay_max_input.grid(row=2, column=2, padx=10, pady=5, sticky="w")
+        self.join_delay_max_input.insert(0, str(join_delay_max))
+
+        ctk.CTkLabel(self.delay_frame, text="Friend request delay (s) min/max").grid(row=3, column=0, padx=10, pady=5, sticky="w")
+        self.friend_delay_min_input = ctk.CTkEntry(self.delay_frame, width=120)
+        self.friend_delay_min_input.grid(row=3, column=1, padx=10, pady=5, sticky="w")
+        self.friend_delay_min_input.insert(0, str(friend_delay_min))
+        self.friend_delay_max_input = ctk.CTkEntry(self.delay_frame, width=120)
+        self.friend_delay_max_input.grid(row=3, column=2, padx=10, pady=5, sticky="w")
+        self.friend_delay_max_input.insert(0, str(friend_delay_max))
+
+        ctk.CTkLabel(self.delay_frame, text="Status delay (h) min/max").grid(row=4, column=0, padx=10, pady=5, sticky="w")
+        self.status_delay_min_input = ctk.CTkEntry(self.delay_frame, width=120)
+        self.status_delay_min_input.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+        self.status_delay_min_input.insert(0, str(status_delay_min))
+        self.status_delay_max_input = ctk.CTkEntry(self.delay_frame, width=120)
+        self.status_delay_max_input.grid(row=4, column=2, padx=10, pady=5, sticky="w")
+        self.status_delay_max_input.insert(0, str(status_delay_max))
+
         # 2. SEKCJA JOINERA (NOWOŚĆ)
         self.joiner_frame = ctk.CTkFrame(parent)
         self.joiner_frame.pack(fill="x", pady=10)
@@ -647,13 +764,10 @@ class MassDMApp(ctk.CTk):
         self.status_type_var = ctk.StringVar(value="online")
         self.status_dropdown = ctk.CTkOptionMenu(self.status_frame, values=["online", "idle", "dnd", "invisible"], variable=self.status_type_var)
         self.status_dropdown.grid(row=1, column=1, padx=10, pady=5)
-        self.status_interval_input = ctk.CTkEntry(self.status_frame, placeholder_text="Interval (hours)", width=200)
-        self.status_interval_input.grid(row=2, column=0, padx=10, pady=5, sticky="w")
-        self.status_interval_input.insert(0, "3")
         self.update_status_btn = ctk.CTkButton(self.status_frame, text="Start Auto Status", fg_color="#9b59b6", command=self.start_status_update)
-        self.update_status_btn.grid(row=3, column=0, pady=10, sticky="w")
+        self.update_status_btn.grid(row=2, column=0, pady=10, sticky="w")
         self.stop_status_btn = ctk.CTkButton(self.status_frame, text="Stop Auto Status", fg_color="#c0392b", command=self.stop_status_update)
-        self.stop_status_btn.grid(row=3, column=1, pady=10, sticky="e")
+        self.stop_status_btn.grid(row=2, column=1, pady=10, sticky="e")
 
         # 5. SEKCJA SCRAPERA
         self.scrape_frame = ctk.CTkFrame(parent)

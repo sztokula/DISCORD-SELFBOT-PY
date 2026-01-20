@@ -132,7 +132,7 @@ class DiscordWorker:
             self.db.remove_account(account_id)
         return None, True
 
-    def send_dm(self, account_id, token, user_id, message_template, proxy=None, add_friend=False):
+    def send_dm(self, account_id, token, user_id, message_template, proxy=None, add_friend=False, friend_delay_min=0, friend_delay_max=0):
         headers = {
             "Authorization": token,
             "Content-Type": "application/json",
@@ -146,7 +146,11 @@ class DiscordWorker:
                 # Opcjonalnie: Zaproszenie do znajomych
                 if add_friend:
                     self.send_friend_request(client, user_id)
-                    self._sleep_with_stop(random.randint(2, 5))
+                    if friend_delay_max > 0:
+                        delay = random.randint(friend_delay_min, friend_delay_max)
+                        if delay > 0:
+                            self.log(f"[Friend Request] Oczekiwanie {delay}s przed DM do {user_id}.")
+                            self._sleep_with_stop(delay)
 
                 # Otwarcie kanału DM
                 url_channel = "https://discord.com/api/v9/users/@me/channels"
@@ -192,7 +196,7 @@ class DiscordWorker:
             except Exception as e:
                 return False, str(e)
 
-    def run_mission(self, message_templates, delay_min, delay_max, use_friend_req=False):
+    def run_mission(self, message_templates, delay_min, delay_max, use_friend_req=False, friend_delay_min=0, friend_delay_max=0):
         self.is_running = True
         self.log("[Mission] Startujemy...")
         self.db.reset_daily_counters()
@@ -217,7 +221,16 @@ class DiscordWorker:
                 t_id, u_id = target
                 did_send_attempt = True
                 chosen_template = random.choice(message_templates)
-                success, msg = self.send_dm(acc_id, token, u_id, chosen_template, proxy, use_friend_req)
+                success, msg = self.send_dm(
+                    acc_id,
+                    token,
+                    u_id,
+                    chosen_template,
+                    proxy,
+                    use_friend_req,
+                    friend_delay_min,
+                    friend_delay_max,
+                )
                 
                 if success:
                     self.db.update_target_status(t_id, "Sent")

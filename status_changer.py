@@ -147,19 +147,21 @@ class StatusChanger:
         finally:
             self.is_running = False
 
-    def run_auto_update(self, status_type, custom_text, interval_hours):
+    def run_auto_update(self, status_type, custom_text, delay_min_hours, delay_max_hours):
         if self.auto_running:
             self.log("[Status] Automatyczny status changer już działa.")
             return
         self.auto_running = True
-        interval_seconds = max(0.1, float(interval_hours)) * 3600.0
+        min_seconds = max(0.1, float(delay_min_hours)) * 3600.0
+        max_seconds = max(min_seconds, float(delay_max_hours) * 3600.0)
         while self.auto_running:
             self.log("[Status] Start automatycznej aktualizacji statusów.")
             self._update_all_accounts(status_type, custom_text, running_check=lambda: self.auto_running)
             if not self.auto_running:
                 break
-            self.log(f"[Status] Kolejna aktualizacja za {interval_seconds / 3600:.2f}h.")
-            self._sleep_with_stop(interval_seconds, running_check=lambda: self.auto_running)
+            wait_seconds = random.uniform(min_seconds, max_seconds)
+            self.log(f"[Status] Kolejna aktualizacja za {wait_seconds / 3600:.2f}h.")
+            self._sleep_with_stop(wait_seconds, running_check=lambda: self.auto_running)
         self.auto_running = False
 
     def stop(self):

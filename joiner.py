@@ -112,7 +112,7 @@ class DiscordJoiner:
 
         return False, "Rate Limit (po ponownych próbach)"
 
-    def run_mass_join(self, invite_codes):
+    def run_mass_join(self, invite_codes, delay_min, delay_max):
         self.is_running = True
         self.db.reset_daily_counters()
         accounts = self.db.get_active_accounts("discord")
@@ -147,7 +147,7 @@ class DiscordJoiner:
             
             did_join_attempt = True
             # BARDZO WAŻNE: Duży odstęp czasu przy dołączaniu
-            wait = random.randint(10, 30)
+            wait = random.randint(delay_min, delay_max)
             self.log(f"[Joiner] Oczekiwanie {wait}s przed następnym kontem...")
             self._sleep_with_stop(wait)
 
