@@ -21,6 +21,8 @@ class DatabaseManager:
             "anticaptcha_api_key",
             "anti-captcha_api_key",
         }
+        self.warmup_days = 7
+        self.warmup_min_limit = 1
 
     def get_connection(self):
         conn = sqlite3.connect(self.db_name, timeout=30)
@@ -101,7 +103,8 @@ class DatabaseManager:
                     last_use TIMESTAMP,
                     join_daily_limit INTEGER DEFAULT 5,
                     join_today INTEGER DEFAULT 0,
-                    join_last_use TIMESTAMP
+                    join_last_use TIMESTAMP,
+                    created_at TIMESTAMP
                 )
             ''')
             self._ensure_account_columns(conn)
@@ -135,6 +138,25 @@ class DatabaseManager:
             cursor.execute("ALTER TABLE accounts ADD COLUMN join_today INTEGER DEFAULT 0")
         if "join_last_use" not in existing:
             cursor.execute("ALTER TABLE accounts ADD COLUMN join_last_use TIMESTAMP")
+        if "created_at" not in existing:
+            cursor.execute("ALTER TABLE accounts ADD COLUMN created_at TIMESTAMP")
+
+    def _get_effective_daily_limit(self, base_limit, created_at):
+        if base_limit is None:
+            return 0
+        if not created_at:
+            return base_limit
+        try:
+            created_dt = datetime.fromisoformat(str(created_at))
+        except (TypeError, ValueError):
+            return base_limit
+        if self.warmup_days <= 0:
+            return base_limit
+        age_seconds = max(0.0, (datetime.now() - created_dt).total_seconds())
+        ratio = min(1.0, age_seconds / (self.warmup_days * 86400.0))
+        warmed = int(base_limit * ratio)
+        warmed = max(self.warmup_min_limit, warmed)
+        return min(base_limit, warmed)
 
     def migrate_plaintext_tokens(self, conn):
         cursor = conn.cursor()
@@ -153,10 +175,11 @@ class DatabaseManager:
                 conn = self.get_connection()
                 cursor = conn.cursor()
                 encrypted_token = self._encrypt_token(token)
+                created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 cursor.execute('''
-                    INSERT INTO accounts (platform, token, proxy, status, daily_limit, join_daily_limit)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (platform, encrypted_token, proxy, status, limit, join_limit))
+                    INSERT INTO accounts (platform, token, proxy, status, daily_limit, join_daily_limit, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (platform, encrypted_token, proxy, status, limit, join_limit, created_at))
                 conn.commit()
                 return cursor.lastrowid
         except sqlite3.IntegrityError:
@@ -168,11 +191,20 @@ class DatabaseManager:
     def get_active_accounts(self, platform):
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM accounts WHERE platform = ? AND status = "Active"', (platform,))
+        cursor.execute('''
+            SELECT id, platform, token, proxy, status, daily_limit, sent_today, last_use,
+                   join_daily_limit, join_today, join_last_use, created_at
+            FROM accounts
+            WHERE platform = ? AND status = "Active"
+        ''', (platform,))
         accounts = []
         for acc in cursor.fetchall():
             acc_list = list(acc)
             acc_list[2] = self._decrypt_token(acc_list[2])
+            base_limit = acc_list[5]
+            created_at = acc_list[11]
+            acc_list[5] = self._get_effective_daily_limit(base_limit, created_at)
+            acc_list = acc_list[:11]
             accounts.append(tuple(acc_list))
         conn.close()
         return accounts
@@ -309,13 +341,17 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT id, status, proxy, daily_limit, sent_today, join_daily_limit, join_today
+            SELECT id, status, proxy, daily_limit, sent_today, join_daily_limit, join_today, created_at
             FROM accounts
             ORDER BY id ASC
         ''')
         rows = cursor.fetchall()
         conn.close()
-        return rows
+        overview = []
+        for acc_id, status, proxy, dm_limit, sent_today, join_limit, join_today, created_at in rows:
+            effective_limit = self._get_effective_daily_limit(dm_limit, created_at)
+            overview.append((acc_id, status, proxy, effective_limit, sent_today, join_limit, join_today))
+        return overview
 
     def reset_account_counters(self):
         with self.write_lock:
@@ -411,5 +447,3 @@ class DatabaseManager:
         if isinstance(value, str) and value.startswith("enc:"):
             return self._decrypt_token(value)
         return value
-
-

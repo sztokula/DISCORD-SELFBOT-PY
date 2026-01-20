@@ -58,6 +58,9 @@ class UpdateManager:
         update_files = self._parse_files_payload(files_payload)
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
+            backup_root = tmp_path / "backup"
+            backup_root.mkdir(parents=True, exist_ok=True)
+            applied = []
             for update_file in update_files:
                 if self._is_excluded(update_file.path):
                     self.logger(f"[Updater] Pomijam plik z listy wykluczeń: {update_file.path}")
@@ -69,12 +72,16 @@ class UpdateManager:
                 self._download_file(update_file.url, dest)
                 self._validate_sha256(dest, update_file.sha256)
 
-            for update_file in update_files:
-                if self._is_excluded(update_file.path):
-                    continue
-                source = tmp_path / update_file.path
-                target = self.app_root / update_file.path
-                self._replace_file(source, target)
+            try:
+                for update_file in update_files:
+                    if self._is_excluded(update_file.path):
+                        continue
+                    source = tmp_path / update_file.path
+                    target = self.app_root / update_file.path
+                    applied.append(self._replace_file_with_backup(source, target, backup_root))
+            except UpdateError as exc:
+                self._rollback_replacements(applied)
+                raise UpdateError(f"Aktualizacja przerwana: {exc}") from exc
 
     def _require_valid_signature(self, update_data: dict) -> None:
         signature = update_data.get("signature")
@@ -100,6 +107,9 @@ class UpdateManager:
     def _apply_archive_update(self, download_url: str, expected_hash: str | None) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
+            backup_root = tmp_path / "backup"
+            backup_root.mkdir(parents=True, exist_ok=True)
+            applied = []
             archive_path = tmp_path / "update.zip"
             self._download_file(download_url, archive_path)
             if expected_hash:
@@ -124,12 +134,16 @@ class UpdateManager:
                     raise UpdateError(f"Brak pliku w paczce: {update_file.path}.")
                 self._validate_sha256(source_path, update_file.sha256)
 
-            for update_file in update_files:
-                if self._is_excluded(update_file.path):
-                    continue
-                source_path = extract_dir / update_file.path
-                target_path = self.app_root / update_file.path
-                self._replace_file(source_path, target_path)
+            try:
+                for update_file in update_files:
+                    if self._is_excluded(update_file.path):
+                        continue
+                    source_path = extract_dir / update_file.path
+                    target_path = self.app_root / update_file.path
+                    applied.append(self._replace_file_with_backup(source_path, target_path, backup_root))
+            except UpdateError as exc:
+                self._rollback_replacements(applied)
+                raise UpdateError(f"Aktualizacja przerwana: {exc}") from exc
 
     def _safe_extract(self, archive: zipfile.ZipFile, extract_dir: Path) -> None:
         base = extract_dir.resolve()
@@ -215,6 +229,40 @@ class UpdateManager:
         shutil.copy2(source, temp_target)
         os.replace(temp_target, target)
         self.logger(f"[Updater] ZastÄ…piono plik: {target.relative_to(self.app_root)}")
+
+    def _replace_file_with_backup(self, source: Path, target: Path, backup_root: Path) -> dict:
+        if not self._is_safe_path(target):
+            raise UpdateError(f"Nieprawidlowa sciezka docelowa: {target}.")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        existed = target.exists()
+        backup_path = None
+        if existed:
+            backup_path = backup_root / target.relative_to(self.app_root)
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(target, backup_path)
+        try:
+            self._replace_file(source, target)
+        except UpdateError:
+            raise
+        except OSError as exc:
+            raise UpdateError(
+                f"Nie mozna podmienic pliku {target}: {exc}. Zamknij aplikacje i sprobuj ponownie."
+            ) from exc
+        return {"target": target, "backup": backup_path, "existed": existed}
+
+    def _rollback_replacements(self, applied: list[dict]) -> None:
+        for item in reversed(applied):
+            target = item.get("target")
+            backup = item.get("backup")
+            existed = item.get("existed")
+            try:
+                if backup and Path(backup).exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(backup, target)
+                elif not existed and target and Path(target).exists():
+                    Path(target).unlink()
+            except OSError:
+                pass
 
     def _is_safe_path(self, path: Path) -> bool:
         try:
