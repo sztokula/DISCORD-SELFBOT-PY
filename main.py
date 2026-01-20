@@ -389,9 +389,31 @@ class MassDMApp(ctk.CTk):
         parsed = urlparse(f"http://{proxy}")
         return bool(parsed.hostname and parsed.port)
 
+    def _restore_proxy_verified_accounts(self):
+        if not self._is_proxy_required():
+            return 0
+        restored = 0
+        accounts = self.db.get_accounts_overview()
+        for acc_id, status, proxy, *_rest in accounts:
+            status_value = (status or "").strip().casefold()
+            if status_value != "unverified":
+                continue
+            if not proxy or not self._is_proxy_format_valid(proxy):
+                continue
+            ok, _err = self._check_proxy_alive(proxy)
+            if ok:
+                self.db.update_account_status(acc_id, "Active")
+                restored += 1
+        if restored:
+            self.add_log(f"[Proxy] Restored {restored} account(s) to Active.")
+        return restored
+
     def _ensure_account_proxies(self, accounts, context_label):
         if not self._is_proxy_required():
             return accounts
+        restored = self._restore_proxy_verified_accounts()
+        if restored:
+            accounts = self.db.get_active_accounts("discord")
         if not accounts:
             self.log_error(f"[Proxy] No accounts available for {context_label}.")
             return []
