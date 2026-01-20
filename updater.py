@@ -69,15 +69,12 @@ class UpdateManager:
                 self._download_file(update_file.url, dest)
                 self._validate_sha256(dest, update_file.sha256)
 
-            staging_root = self._create_staging_root()
             for update_file in update_files:
                 if self._is_excluded(update_file.path):
                     continue
                 source = tmp_path / update_file.path
-                target = staging_root / update_file.path
-                self._stage_file(source, target, staging_root)
-
-            self._swap_staged_root(staging_root)
+                target = self.app_root / update_file.path
+                self._replace_file(source, target)
 
     def _require_valid_signature(self, update_data: dict) -> None:
         signature = update_data.get("signature")
@@ -127,15 +124,12 @@ class UpdateManager:
                     raise UpdateError(f"Brak pliku w paczce: {update_file.path}.")
                 self._validate_sha256(source_path, update_file.sha256)
 
-            staging_root = self._create_staging_root()
             for update_file in update_files:
                 if self._is_excluded(update_file.path):
                     continue
                 source_path = extract_dir / update_file.path
-                target_path = staging_root / update_file.path
-                self._stage_file(source_path, target_path, staging_root)
-
-            self._swap_staged_root(staging_root)
+                target_path = self.app_root / update_file.path
+                self._replace_file(source_path, target_path)
 
     def _safe_extract(self, archive: zipfile.ZipFile, extract_dir: Path) -> None:
         base = extract_dir.resolve()

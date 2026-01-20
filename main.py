@@ -24,7 +24,6 @@ ctk.set_default_color_theme("blue")
 APP_VERSION = "1.0"
 DEFAULT_VERSION_ENDPOINT = "https://updates.example.com/massdm/version.json"
 TRUSTED_UPDATE_HOSTS = {"updates.example.com"}
-EXAMPLE_UPDATE_SIGNATURE = "REPLACE_WITH_SIGNATURE"
 
 class MassDMApp(ctk.CTk):
     def __init__(self):
@@ -51,6 +50,8 @@ class MassDMApp(ctk.CTk):
         self.token_manager = TokenManager(self.db, self.add_log)
         self.log_entries = []
         self.error_entries = []
+        self.max_log_entries = 2000
+        self.max_error_entries = 2000
         self.log_filter_var = ctk.StringVar()
         self.error_filter_var = ctk.StringVar()
         self.log_level_var = ctk.StringVar(value="All")
@@ -526,20 +527,34 @@ class MassDMApp(ctk.CTk):
         return True
 
     def process_log_queue(self):
+        trimmed_logs = False
+        trimmed_errors = False
         try:
             while True:
                 entry = self.log_queue.get_nowait()
                 self.log_entries.append(entry)
+                if len(self.log_entries) > self.max_log_entries:
+                    overflow = len(self.log_entries) - self.max_log_entries
+                    del self.log_entries[:overflow]
+                    trimmed_logs = True
                 self._write_log_to_file(entry)
                 if self._matches_log_filter(entry):
                     self._append_log_entry(entry)
                 if self._is_error_entry(entry):
                     self.error_entries.append(entry)
+                    if len(self.error_entries) > self.max_error_entries:
+                        overflow = len(self.error_entries) - self.max_error_entries
+                        del self.error_entries[:overflow]
+                        trimmed_errors = True
                     self._write_error_log_to_file(entry)
                     if self._matches_error_filter(entry):
                         self._append_error_entry(entry)
         except queue.Empty:
             pass
+        if trimmed_logs:
+            self.apply_log_filter()
+        if trimmed_errors:
+            self.apply_error_filter()
         self.after(100, self.process_log_queue)
 
     def _append_log_entry(self, entry):
