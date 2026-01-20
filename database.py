@@ -3,7 +3,7 @@ import hashlib
 import os
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -109,6 +109,18 @@ class DatabaseManager:
             ''')
             self._ensure_account_columns(conn)
             self.migrate_plaintext_tokens(conn)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS last_dm (
+                    account_id INTEGER NOT NULL,
+                    target_user_id TEXT NOT NULL,
+                    last_sent_at TIMESTAMP NOT NULL,
+                    PRIMARY KEY (account_id, target_user_id)
+                )
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_last_dm_target
+                ON last_dm (target_user_id)
+            ''')
             # Tabela celĂłw
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS targets (
@@ -253,13 +265,71 @@ class DatabaseManager:
             conn.commit()
             conn.close()
 
-    def get_next_target(self, platform):
+    def get_next_target(self, platform, min_target_interval_seconds=0):
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT id, user_id FROM targets WHERE platform = ? AND status = "Pending" LIMIT 1', (platform,))
+        if min_target_interval_seconds and min_target_interval_seconds > 0:
+            cutoff = (datetime.now() - timedelta(seconds=min_target_interval_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute('''
+                SELECT t.id, t.user_id
+                FROM targets t
+                LEFT JOIN (
+                    SELECT target_user_id, MAX(last_sent_at) AS last_sent_at
+                    FROM last_dm
+                    GROUP BY target_user_id
+                ) l ON l.target_user_id = t.user_id
+                WHERE t.platform = ? AND t.status = "Pending"
+                  AND (l.last_sent_at IS NULL OR l.last_sent_at < ?)
+                ORDER BY t.id ASC
+                LIMIT 1
+            ''', (platform, cutoff))
+        else:
+            cursor.execute(
+                'SELECT id, user_id FROM targets WHERE platform = ? AND status = "Pending" LIMIT 1',
+                (platform,),
+            )
         target = cursor.fetchone()
         conn.close()
         return target
+
+    def get_last_dm_for_account(self, account_id):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT MAX(last_sent_at) FROM last_dm WHERE account_id = ?', (account_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row or not row[0]:
+            return None
+        return row[0]
+
+    def get_account_dm_cooldown(self, account_id, min_interval_seconds):
+        if min_interval_seconds <= 0:
+            return 0.0
+        last_sent = self.get_last_dm_for_account(account_id)
+        if not last_sent:
+            return 0.0
+        try:
+            last_dt = datetime.fromisoformat(str(last_sent))
+        except (TypeError, ValueError):
+            return 0.0
+        elapsed = (datetime.now() - last_dt).total_seconds()
+        remaining = float(min_interval_seconds) - elapsed
+        return max(0.0, remaining)
+
+    def record_last_dm(self, account_id, target_user_id):
+        if not account_id or not target_user_id:
+            return
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO last_dm (account_id, target_user_id, last_sent_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(account_id, target_user_id) DO UPDATE SET last_sent_at = excluded.last_sent_at
+            ''', (account_id, target_user_id, timestamp))
+            conn.commit()
+            conn.close()
 
     def update_target_status(self, target_id, status, error_msg=""):
         with self.write_lock:
@@ -372,6 +442,7 @@ class DatabaseManager:
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+            cursor.execute("DELETE FROM last_dm WHERE account_id = ?", (account_id,))
             conn.commit()
             conn.close()
 

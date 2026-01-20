@@ -2,12 +2,19 @@ import httpx
 import time
 
 class DiscordScraper:
-    def __init__(self, db_manager, log_callback):
+    def __init__(self, db_manager, log_callback, metrics=None):
         self.db = db_manager
         self.log = log_callback
+        self.metrics = metrics
         self.is_scraping = False
         self.max_retries = 3
         self.backoff_factor = 1.5
+
+    def _record_request(self, duration, response=None):
+        if not self.metrics:
+            return
+        rate_limited = response is not None and response.status_code == 429
+        self.metrics.record_request(duration, rate_limited=rate_limited)
 
     def _get_retry_after(self, response, default=5.0):
         retry_header = response.headers.get("Retry-After")
@@ -74,7 +81,9 @@ class DiscordScraper:
             time.sleep(min(interval, max(0.0, remaining)))
 
     def _fetch_self_id(self, client):
+        start = time.monotonic()
         response = client.get("https://discord.com/api/v9/users/@me")
+        self._record_request(time.monotonic() - start, response)
         if response.status_code != 200:
             self.log(f"[Scraper] Nie udało się pobrać @me: {response.status_code}")
             return None
@@ -105,7 +114,9 @@ class DiscordScraper:
                     if last_msg_id:
                         params["before"] = last_msg_id
                     
+                    start = time.monotonic()
                     response = client.get(url, params=params)
+                    self._record_request(time.monotonic() - start, response)
                     
                     if response.status_code == 429:
                         if rate_limit_attempt >= self.max_retries:
@@ -168,7 +179,9 @@ class DiscordScraper:
                     if last_member_id:
                         params["after"] = last_member_id
 
+                    start = time.monotonic()
                     response = client.get(url, params=params)
+                    self._record_request(time.monotonic() - start, response)
 
                     if response.status_code == 429:
                         if rate_limit_attempt >= self.max_retries:

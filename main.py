@@ -17,6 +17,7 @@ from status_changer import StatusChanger
 from joiner import DiscordJoiner # Import nowego moduĹ‚u
 from token_manager import TokenManager
 from updater import UpdateManager, UpdateError
+from metrics import HealthMetrics
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -42,12 +43,13 @@ class MassDMApp(ctk.CTk):
             value=self._get_setting_bool("export_banned_tokens_plaintext", False)
         )
         self.log_queue = queue.Queue()
-        self.worker = DiscordWorker(self.db, self.add_log)
-        self.scraper = DiscordScraper(self.db, self.add_log)
-        self.status_changer = StatusChanger(self.db, self.add_log)
+        self.metrics = HealthMetrics()
+        self.worker = DiscordWorker(self.db, self.add_log, self.metrics)
+        self.scraper = DiscordScraper(self.db, self.add_log, self.metrics)
+        self.status_changer = StatusChanger(self.db, self.add_log, self.metrics)
         self.captcha_solver = CaptchaSolver(self.db, self.add_log)
-        self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver) # Inicjalizacja
-        self.token_manager = TokenManager(self.db, self.add_log)
+        self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver, self.metrics) # Inicjalizacja
+        self.token_manager = TokenManager(self.db, self.add_log, self.metrics)
         self.log_entries = []
         self.error_entries = []
         self.max_log_entries = 2000
@@ -103,6 +105,23 @@ class MassDMApp(ctk.CTk):
             command=self.clear_notification,
         )
         self.notification_clear_btn.pack(side="right", padx=10, pady=8)
+
+        # 0.5 HEALTH SECTION
+        self.health_frame = ctk.CTkFrame(self.main_container)
+        self.health_frame.pack(fill="x", pady=(0, 10))
+        for col in range(4):
+            self.health_frame.grid_columnconfigure(col, weight=1)
+        ctk.CTkLabel(self.health_frame, text="Health", font=ctk.CTkFont(size=16, weight="bold")).grid(
+            row=0, column=0, columnspan=4, pady=10
+        )
+        self.health_uptime_label = ctk.CTkLabel(self.health_frame, text="Uptime: --", anchor="w")
+        self.health_uptime_label.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.health_avg_label = ctk.CTkLabel(self.health_frame, text="Avg request: --", anchor="w")
+        self.health_avg_label.grid(row=1, column=1, padx=10, pady=5, sticky="w")
+        self.health_rate_label = ctk.CTkLabel(self.health_frame, text="Rate limits: --", anchor="w")
+        self.health_rate_label.grid(row=1, column=2, padx=10, pady=5, sticky="w")
+        self.health_requests_label = ctk.CTkLabel(self.health_frame, text="Requests: --", anchor="w")
+        self.health_requests_label.grid(row=1, column=3, padx=10, pady=5, sticky="w")
 
         # 1. SEKCJA WIADOMOĹšCI
         self.msg_frame = ctk.CTkFrame(self.main_container)
@@ -187,6 +206,7 @@ class MassDMApp(ctk.CTk):
         self.stop_btn.pack(side="right", padx=50, pady=20)
 
         self.after(100, self.process_log_queue)
+        self.after(1000, self.refresh_health_metrics)
         self.open_settings_window()
 
     def add_log(self, message):
@@ -237,6 +257,18 @@ class MassDMApp(ctk.CTk):
             self.log_error(f"{label} min nie moĹĽe byÄ‡ wiÄ™kszy od max.")
             return None
         return min_val, max_val
+
+    def _parse_min_value(self, input_widget, label, cast_type=int, min_value=0.0):
+        raw = input_widget.get().strip()
+        try:
+            value = cast_type(raw)
+        except (TypeError, ValueError):
+            self.log_error(f"{label} musi byÄ‡ liczbÄ….")
+            return None
+        if value < min_value:
+            self.log_error(f"{label} musi byÄ‡ >= {min_value}.")
+            return None
+        return value
 
     def _normalize_version(self, version_value):
         if not version_value:
@@ -292,6 +324,35 @@ class MassDMApp(ctk.CTk):
     def clear_notification(self):
         self.notification_var.set("Powiadomienia: --")
         self.notification_label.configure(text_color="#8a8a8a")
+
+    def _format_duration(self, total_seconds):
+        total_seconds = int(max(0, total_seconds))
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        if hours > 0:
+            return f"{hours}h {minutes:02d}m {seconds:02d}s"
+        if minutes > 0:
+            return f"{minutes}m {seconds:02d}s"
+        return f"{seconds}s"
+
+    def refresh_health_metrics(self):
+        data = self.metrics.snapshot()
+        uptime = self._format_duration(data["uptime_seconds"])
+        avg_ms = data["avg_request_ms"]
+        rate_count = data["rate_limit_count"]
+        last_rate = data["last_rate_limit_age_seconds"]
+
+        self.health_uptime_label.configure(text=f"Uptime: {uptime}")
+        self.health_avg_label.configure(text=f"Avg request: {avg_ms:.1f} ms")
+        if last_rate is not None:
+            last_text = self._format_duration(last_rate)
+            self.health_rate_label.configure(text=f"Rate limits: {rate_count} (last {last_text} ago)")
+        else:
+            self.health_rate_label.configure(text=f"Rate limits: {rate_count}")
+        self.health_requests_label.configure(text=f"Requests: {data['total_requests']}")
+
+        self.after(1000, self.refresh_health_metrics)
 
     def save_version_settings(self):
         endpoint = self.version_endpoint_input.get().strip()
@@ -860,16 +921,43 @@ class MassDMApp(ctk.CTk):
         )
         if not friend_delay:
             return
+        account_min_interval = self._parse_min_value(
+            self.account_min_interval_input,
+            "Account min interval (s)",
+            cast_type=int,
+            min_value=0,
+        )
+        if account_min_interval is None:
+            return
+        target_min_interval = self._parse_min_value(
+            self.target_min_interval_input,
+            "Target min interval (s)",
+            cast_type=int,
+            min_value=0,
+        )
+        if target_min_interval is None:
+            return
         dm_delay_min, dm_delay_max = dm_delay
         friend_delay_min, friend_delay_max = friend_delay
         self.db.set_setting("dm_delay_min", str(dm_delay_min))
         self.db.set_setting("dm_delay_max", str(dm_delay_max))
         self.db.set_setting("friend_delay_min", str(friend_delay_min))
         self.db.set_setting("friend_delay_max", str(friend_delay_max))
+        self.db.set_setting("account_min_interval", str(account_min_interval))
+        self.db.set_setting("target_min_interval", str(target_min_interval))
         use_friend_req = self.friend_request_var.get()
         thread = threading.Thread(
             target=self.worker.run_mission,
-            args=(templates, dm_delay_min, dm_delay_max, use_friend_req, friend_delay_min, friend_delay_max),
+            args=(
+                templates,
+                dm_delay_min,
+                dm_delay_max,
+                use_friend_req,
+                friend_delay_min,
+                friend_delay_max,
+                account_min_interval,
+                target_min_interval,
+            ),
         )
         thread.daemon = True
         thread.start()
@@ -1118,6 +1206,22 @@ class MassDMApp(ctk.CTk):
         )
         if not status_delay:
             return
+        account_interval = self._parse_min_value(
+            self.account_min_interval_input,
+            "Account min interval (s)",
+            cast_type=int,
+            min_value=0,
+        )
+        if account_interval is None:
+            return
+        target_interval = self._parse_min_value(
+            self.target_min_interval_input,
+            "Target min interval (s)",
+            cast_type=int,
+            min_value=0,
+        )
+        if target_interval is None:
+            return
         dm_delay_min, dm_delay_max = dm_delay
         join_delay_min, join_delay_max = join_delay
         friend_delay_min, friend_delay_max = friend_delay
@@ -1130,6 +1234,8 @@ class MassDMApp(ctk.CTk):
         self.db.set_setting("friend_delay_max", str(friend_delay_max))
         self.db.set_setting("status_delay_min_hours", str(status_delay_min))
         self.db.set_setting("status_delay_max_hours", str(status_delay_max))
+        self.db.set_setting("account_min_interval", str(account_interval))
+        self.db.set_setting("target_min_interval", str(target_interval))
         self.add_log("[Settings] Zapisano ustawienia delay.")
 
     def _build_settings_sections(self, parent):
@@ -1198,6 +1304,8 @@ class MassDMApp(ctk.CTk):
         friend_delay_max = int(self._get_setting_number("friend_delay_max", 5))
         status_delay_min = self._get_setting_number("status_delay_min_hours", 3.0)
         status_delay_max = self._get_setting_number("status_delay_max_hours", 3.0)
+        account_min_interval = int(self._get_setting_number("account_min_interval", 0))
+        target_min_interval = int(self._get_setting_number("target_min_interval", 0))
 
         ctk.CTkLabel(self.delay_frame, text="DM delay (s) min/max").grid(row=1, column=0, padx=10, pady=5, sticky="w")
         self.dm_delay_min_input = ctk.CTkEntry(self.delay_frame, width=120)
@@ -1230,8 +1338,19 @@ class MassDMApp(ctk.CTk):
         self.status_delay_max_input = ctk.CTkEntry(self.delay_frame, width=120)
         self.status_delay_max_input.grid(row=4, column=2, padx=10, pady=5, sticky="w")
         self.status_delay_max_input.insert(0, str(status_delay_max))
+
+        ctk.CTkLabel(self.delay_frame, text="Account min interval (s)").grid(row=5, column=0, padx=10, pady=5, sticky="w")
+        self.account_min_interval_input = ctk.CTkEntry(self.delay_frame, width=120)
+        self.account_min_interval_input.grid(row=5, column=1, padx=10, pady=5, sticky="w")
+        self.account_min_interval_input.insert(0, str(account_min_interval))
+
+        ctk.CTkLabel(self.delay_frame, text="Target min interval (s)").grid(row=6, column=0, padx=10, pady=5, sticky="w")
+        self.target_min_interval_input = ctk.CTkEntry(self.delay_frame, width=120)
+        self.target_min_interval_input.grid(row=6, column=1, padx=10, pady=5, sticky="w")
+        self.target_min_interval_input.insert(0, str(target_min_interval))
+
         self.delay_save_btn = ctk.CTkButton(self.delay_frame, text="Save Delays", command=self.save_delay_settings)
-        self.delay_save_btn.grid(row=5, column=0, padx=10, pady=10, sticky="w")
+        self.delay_save_btn.grid(row=7, column=0, padx=10, pady=10, sticky="w")
 
         # 2. SEKCJA JOINERA (NOWOĹšÄ†)
         self.joiner_frame = ctk.CTkFrame(parent)

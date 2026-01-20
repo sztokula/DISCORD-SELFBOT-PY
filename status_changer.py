@@ -3,13 +3,20 @@ import time
 import random
 
 class StatusChanger:
-    def __init__(self, db_manager, log_callback):
+    def __init__(self, db_manager, log_callback, metrics=None):
         self.db = db_manager
         self.log = log_callback
+        self.metrics = metrics
         self.is_running = False
         self.auto_running = False
         self.max_retries = 3
         self.backoff_factor = 1.5
+
+    def _record_request(self, duration, response=None):
+        if not self.metrics:
+            return
+        rate_limited = response is not None and response.status_code == 429
+        self.metrics.record_request(duration, rate_limited=rate_limited)
 
     def _get_retry_after(self, response, default=5.0):
         retry_header = response.headers.get("Retry-After")
@@ -96,7 +103,9 @@ class StatusChanger:
             with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 refreshed = False
                 for attempt in range(self.max_retries + 1):
+                    start = time.monotonic()
                     response = client.patch(url, json=data)
+                    self._record_request(time.monotonic() - start, response)
                     if response.status_code == 401:
                         token, refreshed = self._handle_unauthorized(client, account_id, token, refreshed)
                         if token:

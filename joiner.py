@@ -3,11 +3,18 @@ import time
 import random
 
 class DiscordJoiner:
-    def __init__(self, db_manager, log_callback, captcha_solver=None):
+    def __init__(self, db_manager, log_callback, captcha_solver=None, metrics=None):
         self.db = db_manager
         self.log = log_callback
         self.is_running = False
         self.captcha_solver = captcha_solver
+        self.metrics = metrics
+
+    def _record_request(self, duration, response=None):
+        if not self.metrics:
+            return
+        rate_limited = response is not None and response.status_code == 429
+        self.metrics.record_request(duration, rate_limited=rate_limited)
 
     def _get_retry_after(self, response, default=5.0):
         retry_header = response.headers.get("Retry-After")
@@ -79,7 +86,9 @@ class DiscordJoiner:
             with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 refreshed = False
                 for attempt in range(max_retries + 1):
+                    start = time.monotonic()
                     response = client.post(url, json={})
+                    self._record_request(time.monotonic() - start, response)
                     if response.status_code == 401:
                         token, refreshed = self._handle_unauthorized(client, account_id, token, refreshed)
                         if token:
@@ -95,7 +104,9 @@ class DiscordJoiner:
                                 payload = {"captcha_key": token_or_err}
                                 if captcha_info.get("rqtoken"):
                                     payload["captcha_rqtoken"] = captcha_info["rqtoken"]
+                                start = time.monotonic()
                                 retry_resp = client.post(url, json=payload)
+                                self._record_request(time.monotonic() - start, retry_resp)
                                 if retry_resp.status_code == 200:
                                     return True, "Sukces (captcha)"
                                 return False, f"Błąd po captcha: {retry_resp.status_code}"

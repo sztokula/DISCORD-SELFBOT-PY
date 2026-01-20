@@ -23,7 +23,10 @@ class TokenManager:
         finally:
             if self.metrics:
                 duration = time.monotonic() - start if "start" in locals() else 0.0
-                self.metrics.record_request(duration, rate_limited=False)
+                rate_limited = False
+                if "response" in locals():
+                    rate_limited = response.status_code == 429
+                self.metrics.record_request(duration, rate_limited=rate_limited)
 
         if response.status_code == 200:
             try:
