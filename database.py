@@ -4,6 +4,7 @@ import os
 import sqlite3
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -27,17 +28,46 @@ class DatabaseManager:
         conn.execute("PRAGMA busy_timeout=30000;")
         return conn
 
-    def _init_fernet(self):
-        key = os.getenv("TOKEN_ENCRYPTION_KEY")
-        if not key:
-            raise RuntimeError("Brak TOKEN_ENCRYPTION_KEY w zmiennych Ĺ›rodowiskowych.")
+    def _get_key_file_path(self):
+        db_path = Path(self.db_name).resolve()
+        return db_path.with_name(db_path.name + ".key")
+
+    def _load_key_from_file(self, path: Path):
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return None
+        return value or None
+
+    def _save_key_to_file(self, path: Path, key: str):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(key, encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(f"Nie mozna zapisac klucza szyfrowania w {path}: {exc}") from exc
+
+    def _build_fernet(self, key: str, source: str):
         try:
             return Fernet(key)
         except (ValueError, TypeError):
             if len(key) == 32:
                 encoded_key = base64.urlsafe_b64encode(key.encode("utf-8"))
                 return Fernet(encoded_key)
-            raise RuntimeError("TOKEN_ENCRYPTION_KEY ma nieprawidĹ‚owy format.")
+            raise RuntimeError(f"Klucz szyfrowania ({source}) ma nieprawidlowy format.")
+
+    def _init_fernet(self):
+        key = os.getenv("TOKEN_ENCRYPTION_KEY", "").strip()
+        source = "TOKEN_ENCRYPTION_KEY"
+        if not key:
+            key_path = self._get_key_file_path()
+            key = self._load_key_from_file(key_path)
+            source = str(key_path)
+            if not key:
+                key = Fernet.generate_key().decode("utf-8")
+                self._save_key_to_file(key_path, key)
+        return self._build_fernet(key, source)
 
     def _encrypt_token(self, token):
         if token.startswith("enc:"):
