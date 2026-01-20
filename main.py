@@ -5,7 +5,7 @@ import re
 import threading
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from urllib import request
 from urllib.error import URLError
 from urllib.parse import urlparse
@@ -63,6 +63,8 @@ class MassDMApp(ctk.CTk):
         self.version_status_var = ctk.StringVar(value="Last check: --")
         self.update_status_var = ctk.StringVar(value="Update: --")
         self.update_info = None
+        self.manual_update_requested = False
+        self.notification_var = ctk.StringVar(value="Powiadomienia: --")
 
         # --- SIDEBAR ---
         self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
@@ -75,6 +77,23 @@ class MassDMApp(ctk.CTk):
         # --- MAIN CONTENT AREA ---
         self.main_container = ctk.CTkFrame(self, fg_color="transparent")
         self.main_container.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
+
+        # 0. SEKCJA POWIADOMIEŃ
+        self.notification_frame = ctk.CTkFrame(self.main_container)
+        self.notification_frame.pack(fill="x", pady=(0, 10))
+        self.notification_label = ctk.CTkLabel(
+            self.notification_frame,
+            textvariable=self.notification_var,
+            anchor="w",
+        )
+        self.notification_label.pack(side="left", padx=10, pady=8, fill="x", expand=True)
+        self.notification_clear_btn = ctk.CTkButton(
+            self.notification_frame,
+            text="Clear",
+            width=80,
+            command=self.clear_notification,
+        )
+        self.notification_clear_btn.pack(side="right", padx=10, pady=8)
 
         # 1. SEKCJA WIADOMOŚCI
         self.msg_frame = ctk.CTkFrame(self.main_container)
@@ -237,6 +256,22 @@ class MassDMApp(ctk.CTk):
     def _set_update_button_state(self, enabled):
         if hasattr(self, "update_download_btn"):
             self.update_download_btn.configure(state="normal" if enabled else "disabled")
+        if hasattr(self, "manual_update_btn"):
+            self.manual_update_btn.configure(state="normal" if enabled else "disabled")
+
+    def show_notification(self, message, level="info"):
+        colors = {
+            "info": "#8a8a8a",
+            "success": "#2ecc71",
+            "warning": "#f39c12",
+            "error": "#e74c3c",
+        }
+        self.notification_var.set(message)
+        self.notification_label.configure(text_color=colors.get(level, "#8a8a8a"))
+
+    def clear_notification(self):
+        self.notification_var.set("Powiadomienia: --")
+        self.notification_label.configure(text_color="#8a8a8a")
 
     def save_version_settings(self):
         endpoint = self.version_endpoint_input.get().strip()
@@ -251,14 +286,20 @@ class MassDMApp(ctk.CTk):
         endpoint = self.version_endpoint_input.get().strip()
         if not endpoint:
             self.log_error("Endpoint wersji jest pusty. Uzupełnij go w ustawieniach.")
+            self.show_notification("Brak endpointu wersji. Uzupełnij ustawienia.", level="error")
             return
         self.db.set_setting("version_endpoint", endpoint)
         self.add_log("[Updater] Sprawdzanie najnowszej wersji...")
+        self.show_notification("Sprawdzanie aktualizacji...", level="info")
         threading.Thread(
             target=self._check_for_updates_worker,
             args=(endpoint,),
             daemon=True,
         ).start()
+
+    def manual_update_with_prompt(self):
+        self.manual_update_requested = True
+        self.check_for_updates()
 
     def _check_for_updates_worker(self, endpoint):
         try:
@@ -268,6 +309,7 @@ class MassDMApp(ctk.CTk):
         except (URLError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             self.add_log(f"[Updater] Nie udało się pobrać wersji: {exc}")
             self.after(0, lambda: self._set_version_status("Last check: error"))
+            self.after(0, lambda: self._handle_update_error("Błąd pobierania informacji o wersji."))
             return
 
         latest = data.get("latest_version") or data.get("version")
@@ -300,16 +342,46 @@ class MassDMApp(ctk.CTk):
             self.after(0, lambda: self._set_update_button_state(False))
             self.after(0, lambda: self._set_update_status("Update: brak"))
         self.after(0, lambda: self._set_version_status(f"Last check: {latest}"))
+        self.after(0, lambda: self._handle_update_result(latest, update_available))
+
+    def _handle_update_result(self, latest, update_available):
+        if update_available:
+            self.show_notification(
+                f"Dostępna aktualizacja ({latest}). Możesz ją pobrać ręcznie.",
+                level="warning",
+            )
+        else:
+            self.show_notification("Brak nowych aktualizacji.", level="success")
+
+        if self.manual_update_requested:
+            self.manual_update_requested = False
+            if update_available:
+                confirmed = messagebox.askyesno(
+                    "Aktualizacja",
+                    f"Dostępna jest aktualizacja {latest}. Czy pobrać i zainstalować teraz?",
+                )
+                if confirmed:
+                    self.download_update()
+            else:
+                messagebox.showinfo("Aktualizacja", "Brak dostępnych aktualizacji.")
+
+    def _handle_update_error(self, message):
+        self.show_notification(message, level="error")
+        if self.manual_update_requested:
+            self.manual_update_requested = False
+            messagebox.showerror("Aktualizacja", message)
 
     def download_update(self):
         endpoint = self.version_endpoint_input.get().strip()
         if not endpoint:
             self.log_error("Endpoint wersji jest pusty. Uzupełnij go w ustawieniach.")
+            self.show_notification("Brak endpointu wersji. Uzupełnij ustawienia.", level="error")
             return
         self.db.set_setting("version_endpoint", endpoint)
         self.add_log("[Updater] Pobieranie aktualizacji...")
         self._set_update_button_state(False)
         self._set_update_status("Update: pobieranie...")
+        self.show_notification("Pobieranie aktualizacji...", level="info")
         threading.Thread(
             target=self._download_update_worker,
             args=(endpoint,),
@@ -325,6 +397,7 @@ class MassDMApp(ctk.CTk):
             self.add_log(f"[Updater] Nie udało się pobrać aktualizacji: {exc}")
             self.after(0, lambda: self._set_update_status("Update: błąd pobierania"))
             self.after(0, lambda: self._set_update_button_state(True))
+            self.after(0, lambda: self.show_notification("Błąd pobierania aktualizacji.", level="error"))
             return
 
         updater = UpdateManager(Path(__file__).resolve().parent, self.add_log)
@@ -334,10 +407,12 @@ class MassDMApp(ctk.CTk):
             self.add_log(f"[Updater] Aktualizacja nieudana: {exc}")
             self.after(0, lambda: self._set_update_status("Update: błąd walidacji"))
             self.after(0, lambda: self._set_update_button_state(True))
+            self.after(0, lambda: self.show_notification("Aktualizacja nieudana.", level="error"))
             return
 
         self.add_log("[Updater] Aktualizacja zakończona. Uruchom ponownie aplikację.")
         self.after(0, lambda: self._set_update_status("Update: zainstalowana"))
+        self.after(0, lambda: self.show_notification("Aktualizacja zainstalowana. Uruchom ponownie aplikację.", level="success"))
 
     def validate_token_format(self, token):
         if not token:
@@ -1046,7 +1121,15 @@ class MassDMApp(ctk.CTk):
         self.version_check_btn = ctk.CTkButton(self.version_frame, text="Check Now", fg_color="#3498db", command=self.check_for_updates)
         self.version_check_btn.grid(row=3, column=1, padx=10, pady=10, sticky="w")
         self.version_status_label = ctk.CTkLabel(self.version_frame, textvariable=self.version_status_var, text_color="#8a8a8a")
-        self.version_status_label.grid(row=4, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="w")
+        self.version_status_label.grid(row=4, column=0, padx=10, pady=(0, 10), sticky="w")
+        self.manual_update_btn = ctk.CTkButton(
+            self.version_frame,
+            text="Manual Update",
+            fg_color="#1abc9c",
+            command=self.manual_update_with_prompt,
+            state="disabled",
+        )
+        self.manual_update_btn.grid(row=4, column=1, padx=10, pady=(0, 10), sticky="w")
         self.update_download_btn = ctk.CTkButton(
             self.version_frame,
             text="Download & Install",
