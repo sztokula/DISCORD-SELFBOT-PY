@@ -43,7 +43,35 @@ class StatusChanger:
             remaining = end_time - time.monotonic()
             time.sleep(min(interval, max(0.0, remaining)))
 
-    def change_status(self, token, status_type, custom_text, proxy=None):
+    def _refresh_token(self, account_id, current_token):
+        if account_id is None:
+            return None
+        try:
+            fresh_token = self.db.get_account_token(account_id)
+        except Exception as e:
+            self.log(f"[Auth] Nie udało się odświeżyć tokenu dla konta {account_id}: {e}")
+            return None
+        if fresh_token and fresh_token != current_token:
+            self.log(f"[Auth] Odświeżono token dla konta {account_id}.")
+            return fresh_token
+        return None
+
+    def _handle_unauthorized(self, client, account_id, current_token, refreshed):
+        if refreshed:
+            self.log(f"[Status] Token dla konta {account_id} nadal niepoprawny. Dezaktywuję konto.")
+            if account_id is not None:
+                self.db.update_account_status(account_id, "Banned/Dead")
+            return None, True
+        new_token = self._refresh_token(account_id, current_token)
+        if new_token:
+            client.headers["Authorization"] = new_token
+            return new_token, True
+        self.log(f"[Status] Brak nowego tokenu dla konta {account_id}. Dezaktywuję konto.")
+        if account_id is not None:
+            self.db.update_account_status(account_id, "Banned/Dead")
+        return None, True
+
+    def change_status(self, account_id, token, status_type, custom_text, proxy=None):
         """
         status_type: 'online', 'idle', 'dnd', 'invisible'
         custom_text: np. 'Playing Metin2'
@@ -64,8 +92,14 @@ class StatusChanger:
         
         try:
             with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+                refreshed = False
                 for attempt in range(self.max_retries + 1):
                     response = client.patch(url, json=data)
+                    if response.status_code == 401:
+                        token, refreshed = self._handle_unauthorized(client, account_id, token, refreshed)
+                        if token:
+                            continue
+                        return False
                     if response.status_code == 200:
                         return True
                     if response.status_code == 429:
@@ -94,7 +128,7 @@ class StatusChanger:
                 break
             
             acc_id, _, token, proxy, _, _, _, _, _, _, _ = acc
-            success = self.change_status(token, status_type, custom_text, proxy)
+            success = self.change_status(acc_id, token, status_type, custom_text, proxy)
             
             if success:
                 self.log(f"[Status] Konto {acc_id} zaktualizowane.")

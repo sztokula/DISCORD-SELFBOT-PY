@@ -28,7 +28,35 @@ class DiscordJoiner:
         except (TypeError, ValueError):
             return default
 
-    def join_server(self, token, invite_code, proxy=None):
+    def _refresh_token(self, account_id, current_token):
+        if account_id is None:
+            return None
+        try:
+            fresh_token = self.db.get_account_token(account_id)
+        except Exception as e:
+            self.log(f"[Auth] Nie udało się odświeżyć tokenu dla konta {account_id}: {e}")
+            return None
+        if fresh_token and fresh_token != current_token:
+            self.log(f"[Auth] Odświeżono token dla konta {account_id}.")
+            return fresh_token
+        return None
+
+    def _handle_unauthorized(self, client, account_id, current_token, refreshed):
+        if refreshed:
+            self.log(f"[Joiner] Token dla konta {account_id} nadal niepoprawny. Dezaktywuję konto.")
+            if account_id is not None:
+                self.db.update_account_status(account_id, "Banned/Dead")
+            return None, True
+        new_token = self._refresh_token(account_id, current_token)
+        if new_token:
+            client.headers["Authorization"] = new_token
+            return new_token, True
+        self.log(f"[Joiner] Brak nowego tokenu dla konta {account_id}. Dezaktywuję konto.")
+        if account_id is not None:
+            self.db.update_account_status(account_id, "Banned/Dead")
+        return None, True
+
+    def join_server(self, account_id, token, invite_code, proxy=None):
         """invite_code: tylko końcówka linku, np. 'fajny-serwer' z discord.gg/fajny-serwer"""
         # Czyścimy kod zaproszenia na wypadek gdyby ktoś wkleił cały link
         invite_code = invite_code.split("/")[-1]
@@ -47,8 +75,14 @@ class DiscordJoiner:
 
         try:
             with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+                refreshed = False
                 for attempt in range(max_retries + 1):
                     response = client.post(url, json={})
+                    if response.status_code == 401:
+                        token, refreshed = self._handle_unauthorized(client, account_id, token, refreshed)
+                        if token:
+                            continue
+                        return False, "Unauthorized (token)"
                     if response.status_code == 200:
                         return True, "Sukces"
                     if response.status_code in {400, 403}:
@@ -101,7 +135,7 @@ class DiscordJoiner:
                 self.log(f"[Joiner] Konto {acc_id}: dzienny limit joinów osiągnięty ({join_today}/{join_limit}).")
                 continue
             invite_code = random.choice(invite_codes)
-            success, msg = self.join_server(token, invite_code, proxy)
+            success, msg = self.join_server(acc_id, token, invite_code, proxy)
             
             if success:
                 self.db.increment_join_counter(acc_id)

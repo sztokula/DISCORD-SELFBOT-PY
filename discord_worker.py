@@ -102,7 +102,35 @@ class DiscordWorker:
             remaining = end_time - time.monotonic()
             time.sleep(min(interval, max(0.0, remaining)))
 
-    def send_dm(self, token, user_id, message_template, proxy=None, add_friend=False):
+    def _refresh_token(self, account_id, current_token):
+        if account_id is None:
+            return None
+        try:
+            fresh_token = self.db.get_account_token(account_id)
+        except Exception as e:
+            self.log(f"[Auth] Nie udało się odświeżyć tokenu dla konta {account_id}: {e}")
+            return None
+        if fresh_token and fresh_token != current_token:
+            self.log(f"[Auth] Odświeżono token dla konta {account_id}.")
+            return fresh_token
+        return None
+
+    def _handle_unauthorized(self, client, account_id, current_token, refreshed):
+        if refreshed:
+            self.log(f"[Auth] Token dla konta {account_id} nadal niepoprawny. Dezaktywuję konto.")
+            if account_id is not None:
+                self.db.update_account_status(account_id, "Banned/Dead")
+            return None, True
+        new_token = self._refresh_token(account_id, current_token)
+        if new_token:
+            client.headers["Authorization"] = new_token
+            return new_token, True
+        self.log(f"[Auth] Brak nowego tokenu dla konta {account_id}. Dezaktywuję konto.")
+        if account_id is not None:
+            self.db.update_account_status(account_id, "Banned/Dead")
+        return None, True
+
+    def send_dm(self, account_id, token, user_id, message_template, proxy=None, add_friend=False):
         headers = {
             "Authorization": token,
             "Content-Type": "application/json",
@@ -112,6 +140,7 @@ class DiscordWorker:
         
         with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
             try:
+                refreshed = False
                 # Opcjonalnie: Zaproszenie do znajomych
                 if add_friend:
                     self.send_friend_request(client, user_id)
@@ -122,6 +151,11 @@ class DiscordWorker:
                 channel_id = None
                 for attempt in range(self.max_retries + 1):
                     response = client.post(url_channel, json={"recipient_id": user_id})
+                    if response.status_code == 401:
+                        token, refreshed = self._handle_unauthorized(client, account_id, token, refreshed)
+                        if token:
+                            continue
+                        return False, "Unauthorized (token)"
                     if response.status_code == 200:
                         channel_id = response.json()['id']
                         break
@@ -140,6 +174,11 @@ class DiscordWorker:
 
                 for attempt in range(self.max_retries + 1):
                     msg_resp = client.post(msg_url, json={"content": final_msg})
+                    if msg_resp.status_code == 401:
+                        token, refreshed = self._handle_unauthorized(client, account_id, token, refreshed)
+                        if token:
+                            continue
+                        return False, "Unauthorized (token)"
                     if msg_resp.status_code == 200:
                         return True, "Success"
                     if msg_resp.status_code == 429:
@@ -176,7 +215,7 @@ class DiscordWorker:
                 t_id, u_id = target
                 did_send_attempt = True
                 chosen_template = random.choice(message_templates)
-                success, msg = self.send_dm(token, u_id, chosen_template, proxy, use_friend_req)
+                success, msg = self.send_dm(acc_id, token, u_id, chosen_template, proxy, use_friend_req)
                 
                 if success:
                     self.db.update_target_status(t_id, "Sent")

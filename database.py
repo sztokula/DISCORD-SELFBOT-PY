@@ -143,6 +143,16 @@ class DatabaseManager:
         conn.close()
         return accounts
 
+    def get_account_token(self, account_id):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT token FROM accounts WHERE id = ?", (account_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row or not row[0]:
+            return None
+        return self._decrypt_token(row[0])
+
     def reset_daily_counters(self, reference_datetime=None):
         if reference_datetime is None:
             reference_datetime = datetime.now()
