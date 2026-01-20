@@ -246,6 +246,20 @@ class DatabaseManager:
             self._append_banned_dead_token(token_to_export)
 
     def _append_banned_dead_token(self, token, export_path="banned_dead_tokens.txt"):
+        if not token:
+            return
+
+        try:
+            with open(export_path, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    parts = line.rstrip("\n").split("\t", 1)
+                    if len(parts) == 2 and parts[1] == token:
+                        return
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return
+
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line = f"{timestamp}\t{token}\n"
         try:
