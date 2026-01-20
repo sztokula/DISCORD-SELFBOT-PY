@@ -101,7 +101,7 @@ class UpdateManager:
             extract_dir = tmp_path / "update_extract"
             extract_dir.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(archive_path) as archive:
-                archive.extractall(extract_dir)
+                self._safe_extract(archive, extract_dir)
             manifest_path = self._find_manifest(extract_dir)
             if not manifest_path:
                 raise UpdateError("Brak manifestu aktualizacji (manifest.json/update_manifest.json).")
@@ -119,6 +119,16 @@ class UpdateManager:
                 self._validate_sha256(source_path, update_file.sha256)
                 self._replace_file(source_path, self.app_root / update_file.path)
 
+    def _safe_extract(self, archive: zipfile.ZipFile, extract_dir: Path) -> None:
+        base = extract_dir.resolve()
+        for member in archive.infolist():
+            filename = member.filename
+            if not filename:
+                continue
+            target_path = (extract_dir / filename).resolve()
+            if not str(target_path).startswith(str(base)):
+                raise UpdateError(f"Nieprawidłowa ścieżka w paczce: {filename}.")
+            archive.extract(member, extract_dir)
     def _download_file(self, url: str, destination: Path) -> None:
         try:
             with request.urlopen(url, timeout=30) as response, destination.open("wb") as output:
@@ -189,5 +199,6 @@ class UpdateManager:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise UpdateError(f"Nie udaĹ‚o siÄ™ odczytaÄ‡ manifestu: {exc}") from exc
+
 
 
