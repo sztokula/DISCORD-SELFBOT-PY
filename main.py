@@ -40,10 +40,12 @@ class MassDMApp(ctk.CTk):
         self.log_entries = []
         self.error_entries = []
         self.log_filter_var = ctk.StringVar()
+        self.error_filter_var = ctk.StringVar()
         self.log_level_var = ctk.StringVar(value="All")
         self.logs_dir = Path("logs")
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.log_file_path = self.logs_dir / f"app_{datetime.now().strftime('%Y%m%d')}.log"
+        self.error_log_file_path = self.logs_dir / f"errors_{datetime.now().strftime('%Y%m%d')}.log"
         self.banlist_path = Path("banned_dead_tokens.txt")
 
         self.title("Mass-DM Farm Tool Pro v1.0")
@@ -119,6 +121,23 @@ class MassDMApp(ctk.CTk):
         self.errors_tab = self.log_tabs.add("Errors")
         self.log_box = ctk.CTkTextbox(self.logs_tab, height=200, fg_color="#1a1a1a")
         self.log_box.pack(fill="both", expand=True, padx=10, pady=10)
+        self.error_controls = ctk.CTkFrame(self.errors_tab, fg_color="transparent")
+        self.error_controls.pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkLabel(self.error_controls, text="Error filter:", text_color="#b0b0b0").pack(side="left")
+        self.error_filter_input = ctk.CTkEntry(
+            self.error_controls,
+            textvariable=self.error_filter_var,
+            placeholder_text="Type to filter errors...",
+        )
+        self.error_filter_input.pack(side="left", padx=10, fill="x", expand=True)
+        self.error_filter_var.trace_add("write", self.apply_error_filter)
+        self.error_file_label = ctk.CTkLabel(
+            self.errors_tab,
+            text=f"Error log file: {self.error_log_file_path}",
+            text_color="#8a8a8a",
+            anchor="w",
+        )
+        self.error_file_label.pack(fill="x", padx=10, pady=(5, 0))
         self.error_box = ctk.CTkTextbox(self.errors_tab, height=200, fg_color="#1a1a1a")
         self.error_box.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -249,7 +268,9 @@ class MassDMApp(ctk.CTk):
                     self._append_log_entry(entry)
                 if self._is_error_entry(entry):
                     self.error_entries.append(entry)
-                    self._append_error_entry(entry)
+                    self._write_error_log_to_file(entry)
+                    if self._matches_error_filter(entry):
+                        self._append_error_entry(entry)
         except queue.Empty:
             pass
         self.after(100, self.process_log_queue)
@@ -289,9 +310,28 @@ class MassDMApp(ctk.CTk):
             if self._matches_log_filter(entry):
                 self._append_log_entry(entry)
 
+    def _matches_error_filter(self, entry):
+        filter_text = self.error_filter_var.get().strip().lower()
+        if not filter_text:
+            return True
+        return filter_text in entry["message"].lower() or filter_text in entry["timestamp"].lower()
+
+    def apply_error_filter(self, *_args):
+        self.error_box.delete("1.0", "end")
+        for entry in self.error_entries:
+            if self._matches_error_filter(entry):
+                self._append_error_entry(entry)
+
     def _write_log_to_file(self, entry):
         try:
             with self.log_file_path.open("a", encoding="utf-8") as log_file:
+                log_file.write(f"[{entry['timestamp']}] {entry['message']}\n")
+        except OSError:
+            pass
+
+    def _write_error_log_to_file(self, entry):
+        try:
+            with self.error_log_file_path.open("a", encoding="utf-8") as log_file:
                 log_file.write(f"[{entry['timestamp']}] {entry['message']}\n")
         except OSError:
             pass
