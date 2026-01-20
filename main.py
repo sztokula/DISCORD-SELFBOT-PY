@@ -2,6 +2,8 @@ import customtkinter as ctk
 import queue
 import re
 import threading
+from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlparse
 from database import DatabaseManager
 from captcha_solver import CaptchaSolver
@@ -17,7 +19,7 @@ ctk.set_default_color_theme("blue")
 class MassDMApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        
+
         self.db = DatabaseManager()
         self.db.reset_daily_counters()
         self.module_vars = {
@@ -34,6 +36,11 @@ class MassDMApp(ctk.CTk):
         self.captcha_solver = CaptchaSolver(self.db, self.add_log)
         self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver) # Inicjalizacja
         self.token_manager = TokenManager(self.db, self.add_log)
+        self.log_entries = []
+        self.log_filter_var = ctk.StringVar()
+        self.logs_dir = Path("logs")
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        self.log_file_path = self.logs_dir / f"app_{datetime.now().strftime('%Y%m%d')}.log"
 
         self.title("Mass-DM Farm Tool Pro v1.0")
         self.geometry("1100x1000") # Zwiększona wysokość na nową sekcję
@@ -77,6 +84,23 @@ class MassDMApp(ctk.CTk):
         # 2. SEKCJA LOGÓW
         self.log_frame = ctk.CTkFrame(self.main_container)
         self.log_frame.pack(fill="both", expand=True, pady=10)
+        self.log_controls = ctk.CTkFrame(self.log_frame, fg_color="transparent")
+        self.log_controls.pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkLabel(self.log_controls, text="Log filter:", text_color="#b0b0b0").pack(side="left")
+        self.log_filter_input = ctk.CTkEntry(
+            self.log_controls,
+            textvariable=self.log_filter_var,
+            placeholder_text="Type to filter logs...",
+        )
+        self.log_filter_input.pack(side="left", padx=10, fill="x", expand=True)
+        self.log_filter_var.trace_add("write", self.apply_log_filter)
+        self.log_file_label = ctk.CTkLabel(
+            self.log_frame,
+            text=f"Log file: {self.log_file_path}",
+            text_color="#8a8a8a",
+            anchor="w",
+        )
+        self.log_file_label.pack(fill="x", padx=10, pady=(5, 0))
         self.log_box = ctk.CTkTextbox(self.log_frame, height=200, fg_color="#1a1a1a")
         self.log_box.pack(fill="both", padx=10, pady=10)
 
@@ -92,7 +116,8 @@ class MassDMApp(ctk.CTk):
         self.open_settings_window()
 
     def add_log(self, message):
-        self.log_queue.put(message)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.log_queue.put({"timestamp": timestamp, "message": message})
 
     def log_error(self, message):
         self.add_log(f"Błąd: {message}")
@@ -159,12 +184,37 @@ class MassDMApp(ctk.CTk):
     def process_log_queue(self):
         try:
             while True:
-                message = self.log_queue.get_nowait()
-                self.log_box.insert("end", f"> {message}\n")
-                self.log_box.see("end")
+                entry = self.log_queue.get_nowait()
+                self.log_entries.append(entry)
+                self._write_log_to_file(entry)
+                if self._matches_log_filter(entry):
+                    self._append_log_entry(entry)
         except queue.Empty:
             pass
         self.after(100, self.process_log_queue)
+
+    def _append_log_entry(self, entry):
+        self.log_box.insert("end", f"[{entry['timestamp']}] {entry['message']}\n")
+        self.log_box.see("end")
+
+    def _matches_log_filter(self, entry):
+        filter_text = self.log_filter_var.get().strip().lower()
+        if not filter_text:
+            return True
+        return filter_text in entry["message"].lower() or filter_text in entry["timestamp"].lower()
+
+    def apply_log_filter(self, *_args):
+        self.log_box.delete("1.0", "end")
+        for entry in self.log_entries:
+            if self._matches_log_filter(entry):
+                self._append_log_entry(entry)
+
+    def _write_log_to_file(self, entry):
+        try:
+            with self.log_file_path.open("a", encoding="utf-8") as log_file:
+                log_file.write(f"[{entry['timestamp']}] {entry['message']}\n")
+        except OSError:
+            pass
 
     def add_account(self):
         token = self.token_input.get().strip()
