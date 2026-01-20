@@ -2039,12 +2039,25 @@ class MassDMApp(ctk.CTk):
 
     def open_settings_window(self):
         if self.settings_window and self.settings_window.winfo_exists():
+            try:
+                self.settings_window.lift()
+                self.settings_window.focus_force()
+            except Exception:
+                pass
             self.settings_window.focus()
             return
         self._unbind_settings_scroll_fix()
         self.settings_window = ctk.CTkToplevel(self)
         self.settings_window.title("Configuration")
         self.settings_window.geometry("900x900")
+        try:
+            self.settings_window.transient(self)
+            self.settings_window.lift()
+            self.settings_window.focus_force()
+            self.settings_window.attributes("-topmost", True)
+            self.after(200, lambda: self.settings_window.attributes("-topmost", False))
+        except Exception:
+            pass
         self.settings_window.grid_columnconfigure(0, weight=1)
         self.settings_window.grid_rowconfigure(0, weight=1)
         self.settings_container = ctk.CTkScrollableFrame(self.settings_window, fg_color="transparent")
