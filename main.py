@@ -39,6 +39,9 @@ class MassDMApp(ctk.CTk):
             "status": ctk.BooleanVar(value=self._get_setting_bool("module_status", True)),
             "captcha": ctk.BooleanVar(value=self._get_setting_bool("module_captcha", True)),
         }
+        self.export_banned_tokens_plaintext_var = ctk.BooleanVar(
+            value=self._get_setting_bool("export_banned_tokens_plaintext", False)
+        )
         self.log_queue = queue.Queue()
         self.worker = DiscordWorker(self.db, self.add_log)
         self.scraper = DiscordScraper(self.db, self.add_log)
@@ -924,6 +927,14 @@ class MassDMApp(ctk.CTk):
         self._set_setting_bool("module_captcha", self.module_vars["captcha"].get())
         self.apply_module_states()
 
+    def on_export_plaintext_toggle(self):
+        self._set_setting_bool(
+            "export_banned_tokens_plaintext",
+            self.export_banned_tokens_plaintext_var.get(),
+        )
+        status = "włączony" if self.export_banned_tokens_plaintext_var.get() else "wyłączony"
+        self.add_log(f"[Settings] Eksport banlisty plaintext: {status}.")
+
     def apply_module_states(self):
         dm_enabled = self.module_vars["dm"].get()
         joiner_enabled = self.module_vars["joiner"].get()
@@ -1035,6 +1046,13 @@ class MassDMApp(ctk.CTk):
         self.remove_account_input.grid(row=5, column=0, padx=10, pady=5)
         self.remove_account_btn = ctk.CTkButton(self.acc_frame, text="Remove Account", fg_color="#e74c3c", command=self.remove_account_by_id)
         self.remove_account_btn.grid(row=5, column=1, padx=10, pady=5)
+        self.export_banlist_plaintext_toggle = ctk.CTkCheckBox(
+            self.acc_frame,
+            text="Export banlist tokens in plaintext (unsafe)",
+            variable=self.export_banned_tokens_plaintext_var,
+            command=self.on_export_plaintext_toggle,
+        )
+        self.export_banlist_plaintext_toggle.grid(row=6, column=0, columnspan=2, padx=10, pady=(5, 0), sticky="w")
 
         self.acc_overview_frame = ctk.CTkFrame(parent)
         self.acc_overview_frame.pack(fill="x", pady=10)
@@ -1317,6 +1335,9 @@ class MassDMApp(ctk.CTk):
 if __name__ == "__main__":
     app = MassDMApp()
     app.mainloop()
+
+
+
 
 
 

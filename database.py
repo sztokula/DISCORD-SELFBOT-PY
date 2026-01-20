@@ -1,4 +1,5 @@
-import base64
+﻿import base64
+import hashlib
 import os
 import sqlite3
 import threading
@@ -13,6 +14,7 @@ class DatabaseManager:
         self.fernet = self._init_fernet()
         self.init_db()
         self.sensitive_settings = {
+            "export_banned_tokens_plaintext",
             "capsolver_api_key",
             "2captcha_api_key",
             "anticaptcha_api_key",
@@ -28,14 +30,14 @@ class DatabaseManager:
     def _init_fernet(self):
         key = os.getenv("TOKEN_ENCRYPTION_KEY")
         if not key:
-            raise RuntimeError("Brak TOKEN_ENCRYPTION_KEY w zmiennych środowiskowych.")
+            raise RuntimeError("Brak TOKEN_ENCRYPTION_KEY w zmiennych Ĺ›rodowiskowych.")
         try:
             return Fernet(key)
         except (ValueError, TypeError):
             if len(key) == 32:
                 encoded_key = base64.urlsafe_b64encode(key.encode("utf-8"))
                 return Fernet(encoded_key)
-            raise RuntimeError("TOKEN_ENCRYPTION_KEY ma nieprawidłowy format.")
+            raise RuntimeError("TOKEN_ENCRYPTION_KEY ma nieprawidĹ‚owy format.")
 
     def _encrypt_token(self, token):
         if token.startswith("enc:"):
@@ -50,13 +52,13 @@ class DatabaseManager:
         try:
             return self.fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8")
         except InvalidToken:
-            raise RuntimeError("Nieprawidłowy klucz szyfrowania tokenów.")
+            raise RuntimeError("NieprawidĹ‚owy klucz szyfrowania tokenĂłw.")
 
     def init_db(self):
         with self.write_lock:
             conn = self.get_connection()
             cursor = conn.cursor()
-            # Tabela kont (zachowujemy kolumnę proxy)
+            # Tabela kont (zachowujemy kolumnÄ™ proxy)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS accounts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +76,7 @@ class DatabaseManager:
             ''')
             self._ensure_account_columns(conn)
             self.migrate_plaintext_tokens(conn)
-            # Tabela celów
+            # Tabela celĂłw
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS targets (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -249,11 +251,16 @@ class DatabaseManager:
         if not token:
             return
 
+        export_plaintext = self.get_setting("export_banned_tokens_plaintext", "").strip().lower() in {"1", "true", "yes", "on"}
+        token_value = token
+        if not export_plaintext:
+            token_value = hashlib.sha256(token.encode("utf-8")).hexdigest()
+
         try:
             with open(export_path, "r", encoding="utf-8") as handle:
                 for line in handle:
                     parts = line.rstrip("\n").split("\t", 1)
-                    if len(parts) == 2 and parts[1] == token:
+                    if len(parts) == 2 and parts[1] == token_value:
                         return
         except FileNotFoundError:
             pass
@@ -261,7 +268,7 @@ class DatabaseManager:
             return
 
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        line = f"{timestamp}\t{token}\n"
+        line = f"{timestamp}\t{token_value}\n"
         try:
             with open(export_path, "a", encoding="utf-8") as handle:
                 handle.write(line)
@@ -374,3 +381,6 @@ class DatabaseManager:
         if isinstance(value, str) and value.startswith("enc:"):
             return self._decrypt_token(value)
         return value
+
+
+

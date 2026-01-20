@@ -60,7 +60,7 @@ class UpdateManager:
             tmp_path = Path(tmp_dir)
             for update_file in update_files:
                 if self._is_excluded(update_file.path):
-                    self.logger(f"[Updater] Pomijam plik z listy wykluczeĹ„: {update_file.path}")
+                    self.logger(f"[Updater] Pomijam plik z listy wykluczeń: {update_file.path}")
                     continue
                 if not update_file.url:
                     raise UpdateError(f"Brak URL dla pliku {update_file.path}.")
@@ -68,7 +68,16 @@ class UpdateManager:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 self._download_file(update_file.url, dest)
                 self._validate_sha256(dest, update_file.sha256)
-                self._replace_file(dest, self.app_root / update_file.path)
+
+            staging_root = self._create_staging_root()
+            for update_file in update_files:
+                if self._is_excluded(update_file.path):
+                    continue
+                source = tmp_path / update_file.path
+                target = staging_root / update_file.path
+                self._stage_file(source, target, staging_root)
+
+            self._swap_staged_root(staging_root)
 
     def _require_valid_signature(self, update_data: dict) -> None:
         signature = update_data.get("signature")
@@ -108,16 +117,25 @@ class UpdateManager:
             manifest = self._load_manifest(manifest_path)
             update_files = self._parse_files_payload(manifest.get("files", []))
             if not update_files:
-                raise UpdateError("Manifest nie zawiera listy plikĂłw.")
+                raise UpdateError("Manifest nie zawiera listy plików.")
+
             for update_file in update_files:
                 if self._is_excluded(update_file.path):
-                    self.logger(f"[Updater] Pomijam plik z listy wykluczeĹ„: {update_file.path}")
                     continue
                 source_path = extract_dir / update_file.path
                 if not source_path.is_file():
                     raise UpdateError(f"Brak pliku w paczce: {update_file.path}.")
                 self._validate_sha256(source_path, update_file.sha256)
-                self._replace_file(source_path, self.app_root / update_file.path)
+
+            staging_root = self._create_staging_root()
+            for update_file in update_files:
+                if self._is_excluded(update_file.path):
+                    continue
+                source_path = extract_dir / update_file.path
+                target_path = staging_root / update_file.path
+                self._stage_file(source_path, target_path, staging_root)
+
+            self._swap_staged_root(staging_root)
 
     def _safe_extract(self, archive: zipfile.ZipFile, extract_dir: Path) -> None:
         base = extract_dir.resolve()
@@ -125,10 +143,58 @@ class UpdateManager:
             filename = member.filename
             if not filename:
                 continue
-            target_path = (extract_dir / filename).resolve()
-            if not str(target_path).startswith(str(base)):
+            member_path = Path(filename)
+            if member_path.is_absolute() or member_path.drive or ".." in member_path.parts:
+                raise UpdateError(f"Nieprawidłowa ścieżka w paczce: {filename}.")
+            target_path = (extract_dir / member_path).resolve()
+            try:
+                target_path.relative_to(base)
+            except ValueError:
                 raise UpdateError(f"Nieprawidłowa ścieżka w paczce: {filename}.")
             archive.extract(member, extract_dir)
+
+    def _create_staging_root(self) -> Path:
+        staging_root = Path(tempfile.mkdtemp(dir=self.app_root.parent, prefix=".update_staging_"))
+        shutil.copytree(self.app_root, staging_root, dirs_exist_ok=True)
+        return staging_root
+
+    def _stage_file(self, source: Path, target: Path, root: Path) -> None:
+        if not self._is_safe_path_for_root(target, root):
+            raise UpdateError(f"Nieprawidłowa ścieżka docelowa: {target}.")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+    def _is_safe_path_for_root(self, path: Path, root: Path) -> bool:
+        try:
+            path.resolve().relative_to(root.resolve())
+        except ValueError:
+            return False
+        return True
+
+    def _swap_staged_root(self, staging_root: Path) -> None:
+        backup_root = self.app_root.with_name(self.app_root.name + ".backup")
+        if backup_root.exists():
+            raise UpdateError(f"Katalog kopii zapasowej już istnieje: {backup_root}.")
+        try:
+            os.replace(self.app_root, backup_root)
+            os.replace(staging_root, self.app_root)
+        except OSError as exc:
+            if not self.app_root.exists() and backup_root.exists():
+                try:
+                    os.replace(backup_root, self.app_root)
+                except OSError:
+                    pass
+            if staging_root.exists():
+                try:
+                    shutil.rmtree(staging_root)
+                except OSError:
+                    pass
+            raise UpdateError(f"Nie udało się podmienić katalogu aplikacji: {exc}") from exc
+        try:
+            shutil.rmtree(backup_root)
+        except OSError:
+            pass
+
     def _download_file(self, url: str, destination: Path) -> None:
         try:
             with request.urlopen(url, timeout=30) as response, destination.open("wb") as output:
@@ -199,6 +265,10 @@ class UpdateManager:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise UpdateError(f"Nie udaĹ‚o siÄ™ odczytaÄ‡ manifestu: {exc}") from exc
+
+
+
+
 
 
 
