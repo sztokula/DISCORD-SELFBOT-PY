@@ -1670,6 +1670,7 @@ class MassDMApp(ctk.CTk):
         if self.settings_window and self.settings_window.winfo_exists():
             self.settings_window.focus()
             return
+        self._unbind_settings_scroll_fix()
         self.settings_window = ctk.CTkToplevel(self)
         self.settings_window.title("Configuration")
         self.settings_window.geometry("900x900")
@@ -1701,7 +1702,11 @@ class MassDMApp(ctk.CTk):
     def _install_settings_scroll_fix(self):
         if self._settings_scroll_fix_bound:
             return
-        self._settings_scroll_fix_bind_id = self.bind_all("<MouseWheel>", self._settings_scroll_fix, add="+")
+        if not self.settings_window:
+            return
+        self._settings_scroll_fix_bind_id = self.settings_window.bind(
+            "<MouseWheel>", self._settings_scroll_fix, add="+"
+        )
         self._settings_scroll_fix_bound = True
         container = getattr(self, "settings_container", None)
         if not container:
@@ -1717,7 +1722,8 @@ class MassDMApp(ctk.CTk):
         if not self._settings_scroll_fix_bound:
             return
         try:
-            self.unbind_all("<MouseWheel>")
+            if self.settings_window and self._settings_scroll_fix_bind_id:
+                self.settings_window.unbind("<MouseWheel>", self._settings_scroll_fix_bind_id)
         except Exception:
             pass
         self._settings_scroll_fix_bound = False
