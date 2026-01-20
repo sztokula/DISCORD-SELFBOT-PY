@@ -13,6 +13,7 @@ class DiscordWorker:
         self.backoff_factor = 1.5
         self.default_tags = ["#promo", "#info", "#discord", "#community", "#support"]
         self.default_emojis = ["🔥", "✨", "✅", "🚀", "🎉", "💬", "🧩", "🌟"]
+        self._last_template = None
 
     def _record_request(self, duration, response=None):
         if not self.metrics:
@@ -68,6 +69,20 @@ class DiscordWorker:
     def render_message(self, template):
         message = self._replace_random_tokens(template)
         return self.parse_spintax(message)
+
+    def _pick_template(self, templates):
+        if not templates:
+            return ""
+        if len(templates) == 1:
+            chosen = templates[0]
+            self._last_template = chosen
+            return chosen
+        candidates = [tpl for tpl in templates if tpl != self._last_template]
+        if not candidates:
+            candidates = templates
+        chosen = random.choice(candidates)
+        self._last_template = chosen
+        return chosen
 
     def send_friend_request(self, client, user_id):
         """Optional helper that sends a friend request."""
@@ -221,6 +236,7 @@ class DiscordWorker:
         target_min_interval_seconds=0,
     ):
         self.is_running = True
+        self._last_template = None
         self.log("[Mission] Starting...")
         self.db.reset_daily_counters()
         
@@ -251,7 +267,7 @@ class DiscordWorker:
 
                 t_id, u_id = target
                 did_send_attempt = True
-                chosen_template = random.choice(message_templates)
+                chosen_template = self._pick_template(message_templates)
                 success, msg = self.send_dm(
                     acc_id,
                     token,
