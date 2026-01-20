@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -25,6 +26,10 @@ class UpdateError(Exception):
 
 
 class UpdateManager:
+    # Example: set UPDATE_SIGNING_KEY in env and sign payloads with HMAC-SHA256.
+    # Canonical string: json.dumps(payload_without_signature, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    SIGNING_KEY_ENV = "UPDATE_SIGNING_KEY"
+
     def __init__(self, app_root: Path, logger: Callable[[str], None]):
         self.app_root = app_root
         self.logger = logger
@@ -38,6 +43,7 @@ class UpdateManager:
 
     def download_and_apply(self, update_data: dict) -> None:
         files_payload = update_data.get("files")
+        self._require_valid_signature(update_data)
         if files_payload:
             self._apply_files_update(files_payload)
             return
@@ -54,7 +60,7 @@ class UpdateManager:
             tmp_path = Path(tmp_dir)
             for update_file in update_files:
                 if self._is_excluded(update_file.path):
-                    self.logger(f"[Updater] Pomijam plik z listy wykluczeń: {update_file.path}")
+                    self.logger(f"[Updater] Pomijam plik z listy wykluczeĹ„: {update_file.path}")
                     continue
                 if not update_file.url:
                     raise UpdateError(f"Brak URL dla pliku {update_file.path}.")
@@ -63,6 +69,27 @@ class UpdateManager:
                 self._download_file(update_file.url, dest)
                 self._validate_sha256(dest, update_file.sha256)
                 self._replace_file(dest, self.app_root / update_file.path)
+
+    def _require_valid_signature(self, update_data: dict) -> None:
+        signature = update_data.get("signature")
+        if not signature:
+            raise UpdateError("Brak podpisu aktualizacji (signature).")
+        signing_key = os.getenv(self.SIGNING_KEY_ENV, "").strip()
+        if not signing_key:
+            raise UpdateError("Brak klucza podpisu. Ustaw UPDATE_SIGNING_KEY w środowisku.")
+        canonical = self._canonicalize_payload(update_data)
+        expected = hmac.new(
+            signing_key.encode("utf-8"),
+            canonical.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(expected.lower(), str(signature).lower()):
+            raise UpdateError("Nieprawidłowy podpis aktualizacji.")
+
+    def _canonicalize_payload(self, update_data: dict) -> str:
+        data = dict(update_data)
+        data.pop("signature", None)
+        return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
     def _apply_archive_update(self, download_url: str, expected_hash: str | None) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -81,10 +108,10 @@ class UpdateManager:
             manifest = self._load_manifest(manifest_path)
             update_files = self._parse_files_payload(manifest.get("files", []))
             if not update_files:
-                raise UpdateError("Manifest nie zawiera listy plików.")
+                raise UpdateError("Manifest nie zawiera listy plikĂłw.")
             for update_file in update_files:
                 if self._is_excluded(update_file.path):
-                    self.logger(f"[Updater] Pomijam plik z listy wykluczeń: {update_file.path}")
+                    self.logger(f"[Updater] Pomijam plik z listy wykluczeĹ„: {update_file.path}")
                     continue
                 source_path = extract_dir / update_file.path
                 if not source_path.is_file():
@@ -97,7 +124,7 @@ class UpdateManager:
             with request.urlopen(url, timeout=30) as response, destination.open("wb") as output:
                 shutil.copyfileobj(response, output)
         except (URLError, OSError) as exc:
-            raise UpdateError(f"Nie udało się pobrać pliku z {url}: {exc}") from exc
+            raise UpdateError(f"Nie udaĹ‚o siÄ™ pobraÄ‡ pliku z {url}: {exc}") from exc
 
     def _validate_sha256(self, file_path: Path, expected_hash: str) -> None:
         file_hash = hashlib.sha256()
@@ -112,12 +139,12 @@ class UpdateManager:
 
     def _replace_file(self, source: Path, target: Path) -> None:
         if not self._is_safe_path(target):
-            raise UpdateError(f"Nieprawidłowa ścieżka docelowa: {target}.")
+            raise UpdateError(f"NieprawidĹ‚owa Ĺ›cieĹĽka docelowa: {target}.")
         target.parent.mkdir(parents=True, exist_ok=True)
         temp_target = target.with_suffix(target.suffix + ".new")
         shutil.copy2(source, temp_target)
         os.replace(temp_target, target)
-        self.logger(f"[Updater] Zastąpiono plik: {target.relative_to(self.app_root)}")
+        self.logger(f"[Updater] ZastÄ…piono plik: {target.relative_to(self.app_root)}")
 
     def _is_safe_path(self, path: Path) -> bool:
         try:
@@ -140,7 +167,7 @@ class UpdateManager:
             if not path or not sha256:
                 continue
             if not self._is_relative_safe(path):
-                raise UpdateError(f"Nieprawidłowa ścieżka w manifeście: {path}.")
+                raise UpdateError(f"NieprawidĹ‚owa Ĺ›cieĹĽka w manifeĹ›cie: {path}.")
             files.append(UpdateFile(path=str(path), sha256=str(sha256), url=item.get("url")))
         return files
 
@@ -161,4 +188,6 @@ class UpdateManager:
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise UpdateError(f"Nie udało się odczytać manifestu: {exc}") from exc
+            raise UpdateError(f"Nie udaĹ‚o siÄ™ odczytaÄ‡ manifestu: {exc}") from exc
+
+
