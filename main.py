@@ -530,10 +530,16 @@ class MassDMApp(ctk.CTk):
         self.captcha_frame = ctk.CTkFrame(parent)
         self.captcha_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.captcha_frame, text="Captcha Solver (CapSolver / 2Captcha / Anti-Captcha)", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=3, pady=10)
-        self.captcha_provider_var = ctk.StringVar(value="capsolver")
+        self.captcha_provider_labels = {
+            "CapSolver": "capsolver",
+            "2Captcha": "2captcha",
+            "Anti-Captcha": "anticaptcha",
+        }
+        self.captcha_provider_display = {value: key for key, value in self.captcha_provider_labels.items()}
+        self.captcha_provider_var = ctk.StringVar(value=self.captcha_provider_display["capsolver"])
         self.captcha_provider = ctk.CTkOptionMenu(
             self.captcha_frame,
-            values=["capsolver", "2captcha", "anticaptcha"],
+            values=list(self.captcha_provider_labels.keys()),
             variable=self.captcha_provider_var,
             command=self.on_captcha_provider_change,
         )
@@ -596,27 +602,31 @@ class MassDMApp(ctk.CTk):
     def on_captcha_provider_change(self, _value=None):
         self._refresh_captcha_key()
 
+    def _get_captcha_provider_key(self) -> str:
+        provider = self.captcha_provider_var.get()
+        return self.captcha_provider_labels.get(provider, provider)
+
     def _load_captcha_settings(self):
         provider = self.captcha_solver.get_provider()
-        self.captcha_provider_var.set(provider)
+        self.captcha_provider_var.set(self.captcha_provider_display.get(provider, provider))
         self._refresh_captcha_key()
 
     def _refresh_captcha_key(self):
-        provider = self.captcha_provider_var.get()
+        provider = self._get_captcha_provider_key()
         stored_key = self.db.get_setting(f"{provider}_api_key", "")
         self.captcha_key_input.delete(0, "end")
         if stored_key:
             self.captcha_key_input.insert(0, stored_key)
 
     def save_captcha_settings(self):
-        provider = self.captcha_provider_var.get()
+        provider = self._get_captcha_provider_key()
         api_key = self.captcha_key_input.get().strip()
         self.db.set_setting("captcha_provider", provider)
         self.db.set_setting(f"{provider}_api_key", api_key)
         self.add_log(f"[Captcha] Zapisano ustawienia dla {provider}.")
 
     def test_captcha_settings(self):
-        provider = self.captcha_provider_var.get()
+        provider = self._get_captcha_provider_key()
         api_key = self.captcha_key_input.get().strip()
         self.add_log(f"[Captcha] Sprawdzam API {provider}...")
         thread = threading.Thread(target=self._run_captcha_check, args=(provider, api_key))
