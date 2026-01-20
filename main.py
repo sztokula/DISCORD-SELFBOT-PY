@@ -503,6 +503,19 @@ class MassDMApp(ctk.CTk):
             return False
         return True
 
+    def _get_scrape_limit(self, raw_value, default_limit):
+        value = (raw_value or "").strip()
+        if not value:
+            return default_limit
+        try:
+            limit = int(value)
+        except ValueError:
+            self.log_error("Niepoprawny format Range. Użyj liczby całkowitej.")
+            return None
+        if limit <= 0:
+            self.log_error("Range musi być większy od zera.")
+            return None
+        return limit
     def is_valid_guild_id(self, guild_id):
         if not guild_id:
             self.log_error("Niepoprawny Guild ID: puste pole.")
@@ -668,29 +681,37 @@ class MassDMApp(ctk.CTk):
 
     def start_scraping(self):
         if not self.module_vars["scraper"].get():
-            self.log_error("ModuĹ‚ Scraper jest wyĹ‚Ä…czony.")
+            self.log_error("Moduł Scraper jest wyłączony.")
             return
         token = self.token_input.get().strip()
         channel_id = self.scrape_channel_input.get().strip()
+        range_value = self.scrape_range_input.get().strip()
         if not self.validate_token_format(token):
             return
         if not self.is_valid_channel_id(channel_id):
             return
-        thread = threading.Thread(target=self.scraper.scrape_history, args=(token, channel_id, 500))
+        limit = self._get_scrape_limit(range_value, 500)
+        if limit is None:
+            return
+        thread = threading.Thread(target=self.scraper.scrape_history, args=(token, channel_id, limit))
         thread.daemon = True
         thread.start()
 
     def start_guild_scraping(self):
         if not self.module_vars["scraper"].get():
-            self.log_error("ModuĹ‚ Scraper jest wyĹ‚Ä…czony.")
+            self.log_error("Moduł Scraper jest wyłączony.")
             return
         token = self.token_input.get().strip()
         guild_id = self.scrape_guild_input.get().strip()
+        range_value = self.scrape_range_input.get().strip()
         if not self.validate_token_format(token):
             return
         if not self.is_valid_guild_id(guild_id):
             return
-        thread = threading.Thread(target=self.scraper.scrape_guild_members, args=(token, guild_id, 1000))
+        limit = self._get_scrape_limit(range_value, 1000)
+        if limit is None:
+            return
+        thread = threading.Thread(target=self.scraper.scrape_guild_members, args=(token, guild_id, limit))
         thread.daemon = True
         thread.start()
 
@@ -1260,7 +1281,7 @@ class MassDMApp(ctk.CTk):
         self.scrape_server_input.grid(row=1, column=1, padx=10, pady=5, sticky="w")
         self.scrape_server_id_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Server ID", width=180)
         self.scrape_server_id_input.grid(row=1, column=2, padx=10, pady=5, sticky="w")
-        self.scrape_range_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Range", width=140)
+        self.scrape_range_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Range (limit)", width=140)
         self.scrape_range_input.grid(row=1, column=3, padx=10, pady=5, sticky="w")
         self.scrape_btn = ctk.CTkButton(self.scrape_frame, text="Scrape Users", command=self.start_scraping)
         self.scrape_btn.grid(row=1, column=4, padx=10, pady=5)
@@ -1335,6 +1356,8 @@ class MassDMApp(ctk.CTk):
 if __name__ == "__main__":
     app = MassDMApp()
     app.mainloop()
+
+
 
 
 
