@@ -95,13 +95,14 @@ class DiscordScraper:
             return None
         return data.get("id")
 
-    def scrape_history(self, token, channel_id, limit=1000, on_complete=None):
+    def scrape_history(self, token, channel_id, limit=1000, on_complete=None, proxy=None):
         """Fetch user IDs that have posted in a given channel."""
         self.is_scraping = True
         added_any = False
         self.log(f"[Scraper] Starting scrape from channel {channel_id}...")
         
         headers = {"Authorization": token}
+        proxies = {"all://": proxy} if proxy else None
         url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
         
         unique_ids = set()
@@ -109,7 +110,7 @@ class DiscordScraper:
         rate_limit_attempt = 0
         
         try:
-            with httpx.Client(headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 self_id = self._fetch_self_id(client)
                 while len(unique_ids) < limit and self.is_scraping:
                     params = {"limit": 100}
@@ -163,13 +164,14 @@ class DiscordScraper:
     def stop(self):
         self.is_scraping = False
 
-    def scrape_guild_members(self, token, guild_id, limit=1000, on_complete=None):
+    def scrape_guild_members(self, token, guild_id, limit=1000, on_complete=None, proxy=None):
         """Fetch server member list via /guilds/{id}/members."""
         self.is_scraping = True
         added_any = False
         self.log(f"[Scraper] Starting member list fetch for guild {guild_id}...")
 
         headers = {"Authorization": token}
+        proxies = {"all://": proxy} if proxy else None
         url = f"https://discord.com/api/v9/guilds/{guild_id}/members"
 
         unique_ids = set()
@@ -177,7 +179,7 @@ class DiscordScraper:
         rate_limit_attempt = 0
 
         try:
-            with httpx.Client(headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 self_id = self._fetch_self_id(client)
                 while len(unique_ids) < limit and self.is_scraping:
                     remaining = max(1, limit - len(unique_ids))

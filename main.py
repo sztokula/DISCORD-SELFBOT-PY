@@ -19,6 +19,7 @@ from token_manager import TokenManager
 from updater import UpdateManager, UpdateError
 from metrics import HealthMetrics
 from profile_updater import ProfileUpdater
+import httpx
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -62,6 +63,9 @@ class MassDMApp(ctk.CTk):
         self.log_filter_var = ctk.StringVar()
         self.error_filter_var = ctk.StringVar()
         self.log_level_var = ctk.StringVar(value="All")
+        self._proxy_check_cache = {}
+        self._proxy_check_ttl_seconds = 600
+        self._proxy_check_lock = threading.Lock()
         self.logs_dir = Path("logs")
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.log_file_path = self.logs_dir / f"app_{datetime.now().strftime('%Y%m%d')}.log"
@@ -78,6 +82,7 @@ class MassDMApp(ctk.CTk):
         self._settings_scroll_fix_bind_id = None
         self._settings_scrollbar_original = None
         self._settings_scrollbar_widget = None
+        self._settings_refresh_job = None
         self._template_editing = False
         self._template_max_chars = 2000
         self._template_save_job = None
@@ -176,6 +181,7 @@ class MassDMApp(ctk.CTk):
         self.dry_run_var = ctk.BooleanVar(value=self._get_setting_bool("dry_run", False))
         self.auto_accept_rules_var = ctk.BooleanVar(value=self._get_setting_bool("auto_accept_rules", True))
         self.auto_onboarding_var = ctk.BooleanVar(value=self._get_setting_bool("auto_onboarding", True))
+        self.require_proxy_var = ctk.BooleanVar(value=self._get_setting_bool("require_proxy", True))
         self.profile_change_name_var = ctk.BooleanVar(value=self._get_setting_bool("profile_change_name", False))
         self.profile_change_avatar_var = ctk.BooleanVar(value=self._get_setting_bool("profile_change_avatar", False))
         self.profile_append_suffix_var = ctk.BooleanVar(value=self._get_setting_bool("profile_append_suffix", True))
@@ -343,6 +349,70 @@ class MassDMApp(ctk.CTk):
             return ""
         text = f"{value:.4f}".rstrip("0").rstrip(".")
         return text or "0"
+
+    def _is_proxy_required(self):
+        if hasattr(self, "require_proxy_var"):
+            return self.require_proxy_var.get()
+        return self._get_setting_bool("require_proxy", True)
+
+    def _check_proxy_alive(self, proxy):
+        if not proxy:
+            return False, "Proxy is empty."
+        with self._proxy_check_lock:
+            cached = self._proxy_check_cache.get(proxy)
+        now = datetime.now().timestamp()
+        if cached and (now - cached["ts"]) < self._proxy_check_ttl_seconds:
+            return cached["ok"], cached["err"]
+        try:
+            with httpx.Client(
+                proxies={"all://": proxy},
+                timeout=httpx.Timeout(8.0),
+                headers={"User-Agent": "Mozilla/5.0"},
+            ) as client:
+                resp = client.get("https://discord.com/api/v9/experiments")
+            if resp.status_code == 407:
+                ok, err = False, "Proxy auth failed (407)."
+            else:
+                ok, err = True, None
+        except Exception as exc:
+            ok, err = False, f"Proxy error: {exc}"
+        with self._proxy_check_lock:
+            self._proxy_check_cache[proxy] = {"ok": ok, "err": err, "ts": now}
+        return ok, err
+
+    def _ensure_account_proxies(self, accounts, context_label):
+        if not self._is_proxy_required():
+            return True
+        if not accounts:
+            self.log_error(f"[Proxy] No accounts available for {context_label}.")
+            return False
+        for acc_id, _, _, proxy, _, _, _, _, _, _, _ in accounts:
+            if not proxy:
+                self.log_error(f"[Proxy] Account {acc_id}: proxy required.")
+                return False
+            if not self.validate_proxy(proxy):
+                self.log_error(f"[Proxy] Account {acc_id}: invalid proxy format.")
+                return False
+            ok, err = self._check_proxy_alive(proxy)
+            if not ok:
+                self.log_error(f"[Proxy] Account {acc_id}: {err}")
+                return False
+        return True
+
+    def _ensure_scraper_proxy(self, proxy, context_label):
+        if not self._is_proxy_required():
+            return True
+        if not proxy:
+            self.log_error(f"[Proxy] Scraper proxy required for {context_label}.")
+            return False
+        if not self.validate_proxy(proxy):
+            self.log_error(f"[Proxy] Invalid scraper proxy format ({context_label}).")
+            return False
+        ok, err = self._check_proxy_alive(proxy)
+        if not ok:
+            self.log_error(f"[Proxy] Scraper proxy error ({context_label}): {err}")
+            return False
+        return True
 
     def _parse_delay_range(self, min_input, max_input, label, cast_type=int, min_value=0.0):
         min_raw = min_input.get().strip()
@@ -547,6 +617,10 @@ class MassDMApp(ctk.CTk):
         self.db.set_setting("scrape_channel_id", channel_id or None)
         self.db.set_setting("scrape_guild_id", guild_id or None)
         self.db.set_setting("scrape_range", range_value or None)
+        scrape_proxy = None
+        if hasattr(self, "scrape_proxy_input") and self.scrape_proxy_input.winfo_exists():
+            scrape_proxy = self.scrape_proxy_input.get().strip()
+        self.db.set_setting("scrape_proxy", scrape_proxy or None)
 
     def _load_scrape_settings(self):
         if not hasattr(self, "scrape_channel_input"):
@@ -567,6 +641,11 @@ class MassDMApp(ctk.CTk):
         if range_value:
             self.scrape_range_input.delete(0, "end")
             self.scrape_range_input.insert(0, range_value)
+        scrape_proxy = self.db.get_setting("scrape_proxy", "").strip()
+        if hasattr(self, "scrape_proxy_input") and self.scrape_proxy_input.winfo_exists():
+            self.scrape_proxy_input.delete(0, "end")
+            if scrape_proxy:
+                self.scrape_proxy_input.insert(0, scrape_proxy)
 
     def save_status_settings(self):
         if not hasattr(self, "status_text_input"):
@@ -1284,6 +1363,10 @@ class MassDMApp(ctk.CTk):
         proxy = self.proxy_input.get().strip()
         dm_limit_raw = self.dm_limit_input.get().strip()
         join_limit_raw = self.join_limit_input.get().strip()
+        if self._is_proxy_required() and not proxy:
+            self.log_error("Proxy is required.")
+            self._set_input_valid(self.proxy_input, False)
+            return
         if not self.validate_token_format(token, self.token_input):
             return
         if not self.validate_proxy(proxy, self.proxy_input):
@@ -1318,7 +1401,14 @@ class MassDMApp(ctk.CTk):
         thread.start()
 
     def _add_account_worker(self, token, proxy, dm_limit, join_limit):
-        status, info = self.token_manager.validate_token(token, proxy)
+        if self._is_proxy_required():
+            ok, err = self._check_proxy_alive(proxy)
+            if not ok:
+                status, info = "retry", err
+            else:
+                status, info = self.token_manager.validate_token(token, proxy)
+        else:
+            status, info = self.token_manager.validate_token(token, proxy)
         self.after(
             0,
             lambda: self._handle_add_account_result(
@@ -1484,6 +1574,56 @@ class MassDMApp(ctk.CTk):
         if stored:
             self.onboarding_role_whitelist_input.insert("1.0", stored)
 
+    def test_proxy_settings(self):
+        proxy = ""
+        if hasattr(self, "proxy_input") and self.proxy_input.winfo_exists():
+            proxy = self.proxy_input.get().strip()
+        if not proxy:
+            self.log_error("Proxy is empty.")
+            if hasattr(self, "proxy_input"):
+                self._set_input_valid(self.proxy_input, False)
+            return
+        if not self.validate_proxy(proxy, self.proxy_input if hasattr(self, "proxy_input") else None):
+            return
+        ok, err = self._check_proxy_alive(proxy)
+        if ok:
+            self.add_log("[Proxy] Proxy check passed.")
+            if hasattr(self, "proxy_input"):
+                self._set_input_valid(self.proxy_input, True)
+        else:
+            self.log_error(f"[Proxy] {err}")
+            if hasattr(self, "proxy_input"):
+                self._set_input_valid(self.proxy_input, False)
+
+    def test_all_account_proxies(self):
+        accounts = self.db.get_active_accounts("discord")
+        if not accounts:
+            self.log_error("[Proxy] No active accounts to test.")
+            return
+        total = len(accounts)
+        ok_count = 0
+        bad = []
+        for acc_id, _, _, proxy, _, _, _, _, _, _, _ in accounts:
+            if not proxy:
+                bad.append(f"{acc_id}: missing proxy")
+                continue
+            if not self.validate_proxy(proxy):
+                bad.append(f"{acc_id}: invalid proxy")
+                continue
+            ok, err = self._check_proxy_alive(proxy)
+            if ok:
+                ok_count += 1
+            else:
+                bad.append(f"{acc_id}: {err}")
+        if ok_count == total:
+            self.add_log(f"[Proxy] All proxies OK ({ok_count}/{total}).")
+            return
+        self.log_warning(f"[Proxy] Proxies OK: {ok_count}/{total}. Failed: {len(bad)}.")
+        if bad:
+            preview = "; ".join(bad[:10])
+            suffix = "..." if len(bad) > 10 else ""
+            self.log_warning(f"[Proxy] Failures: {preview}{suffix}")
+
     def start_joining(self, on_complete=None):
         if not self.module_vars["joiner"].get():
             self.log_error("Joiner module is disabled.")
@@ -1534,9 +1674,13 @@ class MassDMApp(ctk.CTk):
         self._set_setting_bool("delay_units_hours", True)
         join_delay_min = int(round(self._hours_to_seconds(join_delay_min_h)))
         join_delay_max = int(round(self._hours_to_seconds(join_delay_max_h)))
-        thread = threading.Thread(
-            target=self.joiner.run_mass_join,
-            args=(
+        accounts = self.db.get_active_accounts("discord")
+        def _join_with_proxy_check():
+            if not self._ensure_account_proxies(accounts, "join"):
+                if on_complete:
+                    on_complete(False)
+                return
+            self.joiner.run_mass_join(
                 invites,
                 join_delay_min,
                 join_delay_max,
@@ -1544,8 +1688,8 @@ class MassDMApp(ctk.CTk):
                 auto_accept_rules,
                 auto_onboarding,
                 role_whitelist,
-            ),
-        )
+            )
+        thread = threading.Thread(target=_join_with_proxy_check)
         thread.daemon = True
         thread.start()
         return True
@@ -1589,9 +1733,19 @@ class MassDMApp(ctk.CTk):
             return False
         if channel_entry:
             self.save_scrape_settings()
+        scrape_proxy = ""
+        if hasattr(self, "scrape_proxy_input") and self.scrape_proxy_input.winfo_exists():
+            scrape_proxy = self.scrape_proxy_input.get().strip()
+        else:
+            scrape_proxy = self.db.get_setting("scrape_proxy", "").strip()
+        def _scrape_with_proxy_check():
+            if not self._ensure_scraper_proxy(scrape_proxy, "channel scrape"):
+                if on_complete:
+                    on_complete(False)
+                return
+            self.scraper.scrape_history(token, channel_id, limit, on_complete, proxy=scrape_proxy)
         thread = threading.Thread(
-            target=self.scraper.scrape_history,
-            args=(token, channel_id, limit, on_complete),
+            target=_scrape_with_proxy_check,
         )
         thread.daemon = True
         thread.start()
@@ -1636,9 +1790,19 @@ class MassDMApp(ctk.CTk):
             return False
         if guild_entry:
             self.save_scrape_settings()
+        scrape_proxy = ""
+        if hasattr(self, "scrape_proxy_input") and self.scrape_proxy_input.winfo_exists():
+            scrape_proxy = self.scrape_proxy_input.get().strip()
+        else:
+            scrape_proxy = self.db.get_setting("scrape_proxy", "").strip()
+        def _scrape_with_proxy_check():
+            if not self._ensure_scraper_proxy(scrape_proxy, "guild scrape"):
+                if on_complete:
+                    on_complete(False)
+                return
+            self.scraper.scrape_guild_members(token, guild_id, limit, on_complete, proxy=scrape_proxy)
         thread = threading.Thread(
-            target=self.scraper.scrape_guild_members,
-            args=(token, guild_id, limit, on_complete),
+            target=_scrape_with_proxy_check,
         )
         thread.daemon = True
         thread.start()
@@ -1662,9 +1826,13 @@ class MassDMApp(ctk.CTk):
         status_delay_min, status_delay_max = status_delay
         self.db.set_setting("status_delay_min_hours", str(status_delay_min))
         self.db.set_setting("status_delay_max_hours", str(status_delay_max))
+        accounts = self.db.get_active_accounts("discord")
+        def _status_with_proxy_check():
+            if not self._ensure_account_proxies(accounts, "status update"):
+                return
+            self.status_changer.run_auto_update(status_type, custom_text, status_delay_min, status_delay_max)
         thread = threading.Thread(
-            target=self.status_changer.run_auto_update,
-            args=(status_type, custom_text, status_delay_min, status_delay_max),
+            target=_status_with_proxy_check,
         )
         thread.daemon = True
         thread.start()
@@ -1789,9 +1957,11 @@ class MassDMApp(ctk.CTk):
         dry_run = self.dry_run_var.get()
         if dry_run:
             self.add_log("[Mission] Dry-run enabled. Messages will not be sent.")
-        thread = threading.Thread(
-            target=self.worker.run_mission,
-            args=(
+        accounts = self.db.get_active_accounts("discord")
+        def _mission_with_proxy_check():
+            if not self._ensure_account_proxies(accounts, "mission"):
+                return
+            self.worker.run_mission(
                 templates,
                 dm_delay_min,
                 dm_delay_max,
@@ -1801,7 +1971,9 @@ class MassDMApp(ctk.CTk):
                 account_min_interval,
                 target_min_interval,
                 dry_run,
-            ),
+            )
+        thread = threading.Thread(
+            target=_mission_with_proxy_check,
         )
         thread.daemon = True
         thread.start()
@@ -2064,6 +2236,7 @@ class MassDMApp(ctk.CTk):
         self.settings_container.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
         self._build_settings_sections(self.settings_container)
         self._install_settings_scroll_fix()
+        self._schedule_settings_canvas_refresh()
         self.settings_loaded = True
         self.refresh_workflow_status()
         self.settings_window.protocol("WM_DELETE_WINDOW", self.close_settings_window)
@@ -2083,6 +2256,7 @@ class MassDMApp(ctk.CTk):
             self._set_setting_bool("dry_run", self.dry_run_var.get())
             self._set_setting_bool("auto_accept_rules", self.auto_accept_rules_var.get())
             self._set_setting_bool("auto_onboarding", self.auto_onboarding_var.get())
+            self._set_setting_bool("require_proxy", self.require_proxy_var.get())
             self.settings_window.destroy()
             self.refresh_workflow_status()
         self.settings_window = None
@@ -2117,6 +2291,12 @@ class MassDMApp(ctk.CTk):
             pass
         self._settings_scroll_fix_bound = False
         self._settings_scroll_fix_bind_id = None
+        if self._settings_refresh_job is not None:
+            try:
+                self.after_cancel(self._settings_refresh_job)
+            except Exception:
+                pass
+            self._settings_refresh_job = None
 
     def _settings_scroll_fix(self, event):
         if not (self.settings_window and self.settings_window.winfo_exists()):
@@ -2129,8 +2309,7 @@ class MassDMApp(ctk.CTk):
             return
         try:
             if container.check_if_master_is_canvas(event.widget):
-                canvas.update_idletasks()
-                canvas.configure(scrollregion=canvas.bbox("all"))
+                self._schedule_settings_canvas_refresh()
         except Exception:
             return
 
@@ -2138,6 +2317,17 @@ class MassDMApp(ctk.CTk):
         original = self._settings_scrollbar_original
         if original:
             original(*args)
+        self._schedule_settings_canvas_refresh()
+
+    def _schedule_settings_canvas_refresh(self):
+        if self._settings_refresh_job is not None:
+            return
+        self._settings_refresh_job = self.after(16, self._refresh_settings_canvas)
+
+    def _refresh_settings_canvas(self):
+        self._settings_refresh_job = None
+        if not (self.settings_window and self.settings_window.winfo_exists()):
+            return
         container = getattr(self, "settings_container", None)
         canvas = getattr(container, "_parent_canvas", None) if container else None
         if not canvas:
@@ -2145,6 +2335,7 @@ class MassDMApp(ctk.CTk):
         try:
             canvas.update_idletasks()
             canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.yview_moveto(canvas.yview()[0])
         except Exception:
             return
 
@@ -2238,28 +2429,48 @@ class MassDMApp(ctk.CTk):
         ctk.CTkLabel(self.acc_frame, text="Proxy (http://user:pass@ip:port)").grid(row=3, column=0, padx=10, pady=(0, 2), sticky="w")
         self.proxy_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Proxy (http://user:pass@ip:port)", width=350)
         self.proxy_input.grid(row=4, column=0, padx=10, pady=5)
-        ctk.CTkLabel(self.acc_frame, text="DM daily limit").grid(row=5, column=0, padx=10, pady=(0, 2), sticky="w")
+        self.require_proxy_toggle = ctk.CTkCheckBox(
+            self.acc_frame,
+            text="Require proxy for all actions",
+            variable=self.require_proxy_var,
+        )
+        self.require_proxy_toggle.grid(row=5, column=0, padx=10, pady=(0, 5), sticky="w")
+        ctk.CTkLabel(self.acc_frame, text="DM daily limit").grid(row=6, column=0, padx=10, pady=(0, 2), sticky="w")
         self.dm_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="DM daily limit (np. 15)", width=350)
-        self.dm_limit_input.grid(row=6, column=0, padx=10, pady=5)
+        self.dm_limit_input.grid(row=7, column=0, padx=10, pady=5)
         self.dm_limit_input.insert(0, "15")
-        ctk.CTkLabel(self.acc_frame, text="Join daily limit").grid(row=7, column=0, padx=10, pady=(0, 2), sticky="w")
+        ctk.CTkLabel(self.acc_frame, text="Join daily limit").grid(row=8, column=0, padx=10, pady=(0, 2), sticky="w")
         self.join_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Join daily limit (np. 5)", width=350)
-        self.join_limit_input.grid(row=8, column=0, padx=10, pady=5)
+        self.join_limit_input.grid(row=9, column=0, padx=10, pady=5)
         self.join_limit_input.insert(0, "5")
         self.add_acc_btn = ctk.CTkButton(self.acc_frame, text="Add Account", command=self.add_account)
-        self.add_acc_btn.grid(row=2, column=1, rowspan=7, padx=10, pady=5, sticky="ns")
-        ctk.CTkLabel(self.acc_frame, text="Account ID to remove").grid(row=9, column=0, padx=10, pady=(0, 2), sticky="w")
+        self.add_acc_btn.grid(row=2, column=1, rowspan=6, padx=10, pady=5, sticky="ns")
+        self.proxy_test_btn = ctk.CTkButton(
+            self.acc_frame,
+            text="Test Proxy",
+            fg_color="#3498db",
+            command=self.test_proxy_settings,
+        )
+        self.proxy_test_btn.grid(row=8, column=1, padx=10, pady=5)
+        self.proxy_test_all_btn = ctk.CTkButton(
+            self.acc_frame,
+            text="Test All Proxies",
+            fg_color="#1abc9c",
+            command=self.test_all_account_proxies,
+        )
+        self.proxy_test_all_btn.grid(row=9, column=1, padx=10, pady=(0, 5))
+        ctk.CTkLabel(self.acc_frame, text="Account ID to remove").grid(row=10, column=0, padx=10, pady=(0, 2), sticky="w")
         self.remove_account_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Account ID to remove", width=350)
-        self.remove_account_input.grid(row=10, column=0, padx=10, pady=5)
+        self.remove_account_input.grid(row=11, column=0, padx=10, pady=5)
         self.remove_account_btn = ctk.CTkButton(self.acc_frame, text="Remove Account", fg_color="#e74c3c", command=self.remove_account_by_id)
-        self.remove_account_btn.grid(row=10, column=1, padx=10, pady=5)
+        self.remove_account_btn.grid(row=11, column=1, padx=10, pady=5)
         self.export_banlist_plaintext_toggle = ctk.CTkCheckBox(
             self.acc_frame,
             text="Export banlist tokens in plaintext (unsafe)",
             variable=self.export_banned_tokens_plaintext_var,
             command=self.on_export_plaintext_toggle,
         )
-        self.export_banlist_plaintext_toggle.grid(row=11, column=0, columnspan=2, padx=10, pady=(5, 0), sticky="w")
+        self.export_banlist_plaintext_toggle.grid(row=12, column=0, columnspan=2, padx=10, pady=(5, 0), sticky="w")
 
         self.acc_overview_frame = ctk.CTkFrame(parent)
         self.acc_overview_frame.pack(fill="x", pady=10)
@@ -2688,16 +2899,19 @@ class MassDMApp(ctk.CTk):
         self.scrape_range_input.grid(row=2, column=1, padx=10, pady=5, sticky="w")
         self.scrape_btn = ctk.CTkButton(self.scrape_frame, text="Scrape Users", command=self.start_scraping)
         self.scrape_btn.grid(row=2, column=2, padx=10, pady=5)
-        ctk.CTkLabel(self.scrape_frame, text="Guild ID").grid(row=3, column=0, padx=10, pady=(0, 2), sticky="w")
+        ctk.CTkLabel(self.scrape_frame, text="Scrape proxy").grid(row=3, column=0, padx=10, pady=(0, 2), sticky="w")
+        self.scrape_proxy_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="http://user:pass@ip:port", width=350)
+        self.scrape_proxy_input.grid(row=4, column=0, padx=10, pady=5, columnspan=2, sticky="w")
+        ctk.CTkLabel(self.scrape_frame, text="Guild ID").grid(row=5, column=0, padx=10, pady=(0, 2), sticky="w")
         self.scrape_guild_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Guild ID", width=350)
-        self.scrape_guild_input.grid(row=4, column=0, padx=10, pady=5, columnspan=2, sticky="w")
+        self.scrape_guild_input.grid(row=6, column=0, padx=10, pady=5, columnspan=2, sticky="w")
         self.scrape_guild_btn = ctk.CTkButton(
             self.scrape_frame,
             text="Scrape Guild Members",
             fg_color="#16a085",
             command=self.start_guild_scraping,
         )
-        self.scrape_guild_btn.grid(row=4, column=2, padx=10, pady=5, sticky="w")
+        self.scrape_guild_btn.grid(row=6, column=2, padx=10, pady=5, sticky="w")
         self._load_scrape_settings()
         self.refresh_accounts_overview()
         self.refresh_targets_overview()
