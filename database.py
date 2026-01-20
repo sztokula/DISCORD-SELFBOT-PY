@@ -12,6 +12,10 @@ class DatabaseManager:
         self.write_lock = threading.Lock()
         self.fernet = self._init_fernet()
         self.init_db()
+        self.sensitive_settings = {
+            "capsolver_api_key",
+            "2captcha_api_key",
+        }
 
     def get_connection(self):
         conn = sqlite3.connect(self.db_name, timeout=30)
@@ -76,6 +80,12 @@ class DatabaseManager:
                     platform TEXT NOT NULL,
                     status TEXT DEFAULT 'Pending',
                     error_msg TEXT
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
                 )
             ''')
             conn.commit()
@@ -214,3 +224,36 @@ class DatabaseManager:
             cursor.execute('UPDATE accounts SET status = ? WHERE id = ?', (status, account_id))
             conn.commit()
             conn.close()
+
+    def set_setting(self, key, value):
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            if value is None:
+                cursor.execute("DELETE FROM settings WHERE key = ?", (key,))
+                conn.commit()
+                conn.close()
+                return
+            stored = value
+            if key in self.sensitive_settings and value:
+                stored = self._encrypt_token(value)
+            cursor.execute('''
+                INSERT INTO settings (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ''', (key, stored))
+            conn.commit()
+            conn.close()
+
+    def get_setting(self, key, default=""):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row or row[0] is None:
+            return default
+        value = row[0]
+        if isinstance(value, str) and value.startswith("enc:"):
+            return self._decrypt_token(value)
+        return value

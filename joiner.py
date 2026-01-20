@@ -3,10 +3,11 @@ import time
 import random
 
 class DiscordJoiner:
-    def __init__(self, db_manager, log_callback):
+    def __init__(self, db_manager, log_callback, captcha_solver=None):
         self.db = db_manager
         self.log = log_callback
         self.is_running = False
+        self.captcha_solver = captcha_solver
 
     def _get_retry_after(self, response, default=5.0):
         retry_header = response.headers.get("Retry-After")
@@ -50,15 +51,26 @@ class DiscordJoiner:
                     response = client.post(url, json={})
                     if response.status_code == 200:
                         return True, "Sukces"
-                    elif response.status_code == 403:
+                    if response.status_code in {400, 403}:
+                        captcha_info = self._extract_captcha(response)
+                        if captcha_info and self.captcha_solver:
+                            solved, token_or_err = self.captcha_solver.solve_captcha(captcha_info)
+                            if solved:
+                                payload = {"captcha_key": token_or_err}
+                                if captcha_info.get("rqtoken"):
+                                    payload["captcha_rqtoken"] = captcha_info["rqtoken"]
+                                retry_resp = client.post(url, json=payload)
+                                if retry_resp.status_code == 200:
+                                    return True, "Sukces (captcha)"
+                                return False, f"Błąd po captcha: {retry_resp.status_code}"
+                            return False, f"Captcha error: {token_or_err}"
                         return False, "Wymagana weryfikacja (Captcha/Telefon)"
-                    elif response.status_code == 429:
+                    if response.status_code == 429:
                         retry_after = self._get_retry_after(response)
                         wait_time = retry_after * (backoff_factor ** attempt)
                         self._sleep_with_stop(wait_time)
                         continue
-                    else:
-                        return False, f"Błąd {response.status_code}"
+                    return False, f"Błąd {response.status_code}"
         except Exception as e:
             return False, str(e)
 
@@ -116,3 +128,20 @@ class DiscordJoiner:
         while self.is_running and time.monotonic() < end_time:
             remaining = end_time - time.monotonic()
             time.sleep(min(interval, max(0.0, remaining)))
+
+    def _extract_captcha(self, response):
+        try:
+            data = response.json()
+        except Exception:
+            return None
+        sitekey = data.get("captcha_sitekey")
+        if not sitekey:
+            return None
+        service = data.get("captcha_service") or "hcaptcha"
+        return {
+            "service": service,
+            "sitekey": sitekey,
+            "rqdata": data.get("captcha_rqdata"),
+            "rqtoken": data.get("captcha_rqtoken"),
+            "url": "https://discord.com",
+        }

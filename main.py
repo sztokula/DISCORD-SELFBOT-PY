@@ -4,6 +4,7 @@ import re
 import threading
 from urllib.parse import urlparse
 from database import DatabaseManager
+from captcha_solver import CaptchaSolver
 from discord_worker import DiscordWorker
 from scraper import DiscordScraper
 from status_changer import StatusChanger
@@ -23,7 +24,8 @@ class MassDMApp(ctk.CTk):
         self.worker = DiscordWorker(self.db, self.add_log)
         self.scraper = DiscordScraper(self.db, self.add_log)
         self.status_changer = StatusChanger(self.db, self.add_log)
-        self.joiner = DiscordJoiner(self.db, self.add_log) # Inicjalizacja
+        self.captcha_solver = CaptchaSolver(self.db, self.add_log)
+        self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver) # Inicjalizacja
         self.token_manager = TokenManager(self.db, self.add_log)
 
         self.title("Mass-DM Farm Tool Pro v1.0")
@@ -285,7 +287,27 @@ class MassDMApp(ctk.CTk):
         self.join_btn = ctk.CTkButton(self.joiner_frame, text="Join Server", fg_color="#f39c12", hover_color="#d35400", command=self.start_joining)
         self.join_btn.grid(row=1, column=1, padx=10, pady=5)
 
-        # 3. SEKCJA STATUSU
+        # 3. SEKCJA CAPTCHA
+        self.captcha_frame = ctk.CTkFrame(parent)
+        self.captcha_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(self.captcha_frame, text="Captcha Solver (CapSolver / 2Captcha)", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=3, pady=10)
+        self.captcha_provider_var = ctk.StringVar(value="capsolver")
+        self.captcha_provider = ctk.CTkOptionMenu(
+            self.captcha_frame,
+            values=["capsolver", "2captcha"],
+            variable=self.captcha_provider_var,
+            command=self.on_captcha_provider_change,
+        )
+        self.captcha_provider.grid(row=1, column=0, padx=10, pady=5)
+        self.captcha_key_input = ctk.CTkEntry(self.captcha_frame, placeholder_text="API Key", width=350)
+        self.captcha_key_input.grid(row=1, column=1, padx=10, pady=5)
+        self.captcha_save_btn = ctk.CTkButton(self.captcha_frame, text="Save", command=self.save_captcha_settings)
+        self.captcha_save_btn.grid(row=1, column=2, padx=10, pady=5)
+        self.captcha_test_btn = ctk.CTkButton(self.captcha_frame, text="Test API", fg_color="#16a085", command=self.test_captcha_settings)
+        self.captcha_test_btn.grid(row=2, column=1, padx=10, pady=5)
+        self._load_captcha_settings()
+
+        # 4. SEKCJA STATUSU
         self.status_frame = ctk.CTkFrame(parent)
         self.status_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.status_frame, text="Status & Presence", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
@@ -298,7 +320,7 @@ class MassDMApp(ctk.CTk):
         self.update_status_btn = ctk.CTkButton(self.status_frame, text="Update Statuses", fg_color="#9b59b6", command=self.start_status_update)
         self.update_status_btn.grid(row=2, column=0, columnspan=2, pady=10)
 
-        # 4. SEKCJA SCRAPERA
+        # 5. SEKCJA SCRAPERA
         self.scrape_frame = ctk.CTkFrame(parent)
         self.scrape_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.scrape_frame, text="Scraping Tools", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
@@ -306,6 +328,43 @@ class MassDMApp(ctk.CTk):
         self.scrape_channel_input.grid(row=1, column=0, padx=10, pady=5)
         self.scrape_btn = ctk.CTkButton(self.scrape_frame, text="Scrape Users", command=self.start_scraping)
         self.scrape_btn.grid(row=1, column=1, padx=10, pady=5)
+
+    def on_captcha_provider_change(self, _value=None):
+        self._refresh_captcha_key()
+
+    def _load_captcha_settings(self):
+        provider = self.captcha_solver.get_provider()
+        self.captcha_provider_var.set(provider)
+        self._refresh_captcha_key()
+
+    def _refresh_captcha_key(self):
+        provider = self.captcha_provider_var.get()
+        stored_key = self.db.get_setting(f"{provider}_api_key", "")
+        self.captcha_key_input.delete(0, "end")
+        if stored_key:
+            self.captcha_key_input.insert(0, stored_key)
+
+    def save_captcha_settings(self):
+        provider = self.captcha_provider_var.get()
+        api_key = self.captcha_key_input.get().strip()
+        self.db.set_setting("captcha_provider", provider)
+        self.db.set_setting(f"{provider}_api_key", api_key)
+        self.add_log(f"[Captcha] Zapisano ustawienia dla {provider}.")
+
+    def test_captcha_settings(self):
+        provider = self.captcha_provider_var.get()
+        api_key = self.captcha_key_input.get().strip()
+        self.add_log(f"[Captcha] Sprawdzam API {provider}...")
+        thread = threading.Thread(target=self._run_captcha_check, args=(provider, api_key))
+        thread.daemon = True
+        thread.start()
+
+    def _run_captcha_check(self, provider, api_key):
+        ok, msg = self.captcha_solver.check_balance(provider, api_key)
+        if ok:
+            self.add_log(f"[Captcha] OK ({provider}) - {msg}")
+        else:
+            self.add_log(f"[Captcha] Błąd ({provider}) - {msg}")
 
 if __name__ == "__main__":
     app = MassDMApp()
