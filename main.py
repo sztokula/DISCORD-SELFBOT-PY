@@ -73,6 +73,7 @@ class MassDMApp(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
         self.settings_window = None
         self._settings_scroll_fix_bound = False
+        self._settings_scroll_fix_bind_id = None
         self._settings_scrollbar_original = None
         self._settings_scrollbar_widget = None
         self._template_editing = False
@@ -1695,11 +1696,12 @@ class MassDMApp(ctk.CTk):
             self.settings_window.destroy()
             self.refresh_workflow_status()
         self.settings_window = None
+        self._unbind_settings_scroll_fix()
 
     def _install_settings_scroll_fix(self):
         if self._settings_scroll_fix_bound:
             return
-        self.bind_all("<MouseWheel>", self._settings_scroll_fix, add="+")
+        self._settings_scroll_fix_bind_id = self.bind_all("<MouseWheel>", self._settings_scroll_fix, add="+")
         self._settings_scroll_fix_bound = True
         container = getattr(self, "settings_container", None)
         if not container:
@@ -1710,6 +1712,16 @@ class MassDMApp(ctk.CTk):
         self._settings_scrollbar_original = scrollbar.cget("command")
         self._settings_scrollbar_widget = scrollbar
         scrollbar.configure(command=self._settings_scrollbar_command)
+
+    def _unbind_settings_scroll_fix(self):
+        if not self._settings_scroll_fix_bound:
+            return
+        try:
+            self.unbind_all("<MouseWheel>")
+        except Exception:
+            pass
+        self._settings_scroll_fix_bound = False
+        self._settings_scroll_fix_bind_id = None
 
     def _settings_scroll_fix(self, event):
         if not (self.settings_window and self.settings_window.winfo_exists()):
@@ -1916,12 +1928,20 @@ class MassDMApp(ctk.CTk):
             variable=self.friend_request_var,
         )
         self.friend_request_toggle.pack(anchor="w", padx=20, pady=(0, 10))
+        self.templates_action_row = ctk.CTkFrame(self.msg_frame, fg_color="transparent")
+        self.templates_action_row.pack(fill="x", padx=20, pady=(0, 10))
         self.templates_save_btn = ctk.CTkButton(
-            self.msg_frame,
+            self.templates_action_row,
             text="Save Templates",
             command=self.save_message_templates,
         )
-        self.templates_save_btn.pack(anchor="w", padx=20, pady=(0, 10))
+        self.templates_save_btn.pack(side="left")
+        self.template_save_status_label = ctk.CTkLabel(
+            self.templates_action_row,
+            text="Save status: idle",
+            text_color="#8a8a8a",
+        )
+        self.template_save_status_label.pack(side="right")
         self._load_message_templates()
 
         self.delay_frame = ctk.CTkFrame(parent)
