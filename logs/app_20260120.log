@@ -58,3 +58,43 @@
 [2026-01-20 15:14:00] [Accounts] Pomijam konto 4 - nieprawidĹ‚owy klucz szyfrowania.
 [2026-01-20 15:14:00] [Joiner] Brak aktywnych kont do operacji.
 [2026-01-20 15:14:00] BĹ‚Ä…d: DoĹ‚Ä…czanie nie powiodĹ‚o siÄ™ lub przerwane.
+[2026-01-20 15:37:23] [Settings] Zapisano ustawienia delay.
+[2026-01-20 15:37:23] [Templates] Saved message templates.
+[2026-01-20 15:37:25] [Accounts] Invalid token encryption key.
+[2026-01-20 15:37:25] [Accounts] Skipping account 1 - invalid encryption key.
+[2026-01-20 15:37:25] [Accounts] Invalid token encryption key.
+[2026-01-20 15:37:25] [Accounts] Skipping account 2 - invalid encryption key.
+[2026-01-20 15:37:25] [Accounts] Invalid token encryption key.
+[2026-01-20 15:37:25] [Accounts] Skipping account 3 - invalid encryption key.
+[2026-01-20 15:37:25] [Accounts] Invalid token encryption key.
+[2026-01-20 15:37:25] [Accounts] Skipping account 4 - invalid encryption key.
+[2026-01-20 15:37:25] [Joiner] No active accounts available.
+[2026-01-20 15:37:25] Error: Joining failed or was cancelled.
+[2026-01-20 15:37:26] [Accounts] Invalid token encryption key.
+[2026-01-20 15:37:26] [Accounts] Skipping account 1 - invalid encryption key.
+[2026-01-20 15:37:26] [Accounts] Invalid token encryption key.
+[2026-01-20 15:37:26] [Accounts] Skipping account 2 - invalid encryption key.
+[2026-01-20 15:37:26] [Accounts] Invalid token encryption key.
+[2026-01-20 15:37:26] [Accounts] Skipping account 3 - invalid encryption key.
+[2026-01-20 15:37:26] [Accounts] Invalid token encryption key.
+[2026-01-20 15:37:26] [Accounts] Skipping account 4 - invalid encryption key.
+[2026-01-20 15:37:26] [Joiner] No active accounts available.
+[2026-01-20 15:37:26] Error: Joining failed or was cancelled.
+[2026-01-20 15:40:10] [Captcha] Sprawdzam API capsolver...
+[2026-01-20 15:40:10] [Captcha] Error (capsolver) - Missing API key.
+[2026-01-20 15:40:20] [Captcha] Sprawdzam API 2captcha...
+[2026-01-20 15:40:20] [Captcha] Error (2captcha) - Missing API key.
+[2026-01-20 15:40:24] Error: Version endpoint is empty. Fill it in settings.
+[2026-01-20 15:40:46] [Status] Starting automatic status update.
+[2026-01-20 15:40:46] [Accounts] Invalid token encryption key.
+[2026-01-20 15:40:46] [Accounts] Skipping account 1 - invalid encryption key.
+[2026-01-20 15:40:46] [Accounts] Invalid token encryption key.
+[2026-01-20 15:40:46] [Accounts] Skipping account 2 - invalid encryption key.
+[2026-01-20 15:40:46] [Accounts] Invalid token encryption key.
+[2026-01-20 15:40:46] [Accounts] Skipping account 3 - invalid encryption key.
+[2026-01-20 15:40:46] [Accounts] Invalid token encryption key.
+[2026-01-20 15:40:46] [Accounts] Skipping account 4 - invalid encryption key.
+[2026-01-20 15:40:46] [Status] No active accounts to update status.
+[2026-01-20 15:40:46] [Status] Next update in 3.00h.
+[2026-01-20 15:40:46] [Status] Auto status updater is already running.
+[2026-01-20 15:40:51] [Status] Automatyczna zmiana statusu zatrzymana.

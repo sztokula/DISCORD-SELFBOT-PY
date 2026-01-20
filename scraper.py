@@ -51,7 +51,7 @@ class DiscordScraper:
             reset_value = None
         if reset_value is None:
             return
-        self.log(f"[Scraper] Limit endpointu ({reason}) wyczerpany. Czekam {reset_value:.2f}s...")
+        self.log(f"[Scraper] Endpoint limit ({reason}) exhausted. Waiting {reset_value:.2f}s...")
         self._sleep_with_stop(reset_value)
 
     def _log_member_list_permission_error(self, response):
@@ -70,8 +70,8 @@ class DiscordScraper:
             detail_parts.append(f"message={message}")
         details = f" ({', '.join(detail_parts)})" if detail_parts else ""
         self.log(
-            "[Scraper] Brak uprawnień do pobrania listy członków (HTTP 403). "
-            "Sprawdź czy token ma dostęp do serwera i odpowiednie uprawnienia." + details
+            "[Scraper] Missing permissions to fetch member list (HTTP 403). "
+            "Check that the token has server access and required permissions." + details
         )
 
     def _sleep_with_stop(self, total_seconds, interval=0.5):
@@ -85,20 +85,20 @@ class DiscordScraper:
         response = client.get("https://discord.com/api/v9/users/@me")
         self._record_request(time.monotonic() - start, response)
         if response.status_code != 200:
-            self.log(f"[Scraper] Nie udało się pobrać @me: {response.status_code}")
+            self.log(f"[Scraper] Failed to fetch @me: {response.status_code}")
             return None
         try:
             data = response.json()
         except Exception:
-            self.log("[Scraper] Nie udało się odczytać odpowiedzi @me.")
+            self.log("[Scraper] Failed to parse @me response.")
             return None
         return data.get("id")
 
     def scrape_history(self, token, channel_id, limit=1000, on_complete=None):
-        """Pobiera ID użytkowników, którzy pisali na danym kanale."""
+        """Fetch user IDs that have posted in a given channel."""
         self.is_scraping = True
         added_any = False
-        self.log(f"[Scraper] Rozpoczynanie pobierania z kanału {channel_id}...")
+        self.log(f"[Scraper] Starting scrape from channel {channel_id}...")
         
         headers = {"Authorization": token}
         url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
@@ -121,14 +121,14 @@ class DiscordScraper:
                     
                     if response.status_code == 429:
                         if rate_limit_attempt >= self.max_retries:
-                            self.log("[Scraper] Rate limit przekroczony. Kończę.")
+                            self.log("[Scraper] Rate limit exceeded. Stopping.")
                             break
-                        self.log("[Scraper] Rate limit! Stosuję backoff...")
+                        self.log("[Scraper] Rate limit. Applying backoff...")
                         self._wait_for_rate_limit(response, rate_limit_attempt)
                         rate_limit_attempt += 1
                         continue
                     if response.status_code != 200:
-                        self.log(f"[Scraper] Błąd: {response.status_code}")
+                        self.log(f"[Scraper] Error: {response.status_code}")
                         break
 
                     messages = response.json()
@@ -138,22 +138,22 @@ class DiscordScraper:
                     
                     for msg in messages:
                         u_id = msg['author']['id']
-                        # Nie dodajemy botów ani własnego konta
+                        # Skip bots and own account.
                         if not msg['author'].get('bot') and u_id != self_id:
                             unique_ids.add(u_id)
                         last_msg_id = msg['id']
                     
-                    self.log(f"[Scraper] Znaleziono unikalnych: {len(unique_ids)}...")
-                    self._sleep_with_stop(1) # Delay, żeby nie dostać Rate Limit
+                    self.log(f"[Scraper] Found unique: {len(unique_ids)}...")
+                    self._sleep_with_stop(1) # Delay to avoid rate limit.
             
             # Zapis do bazy
             if unique_ids:
                 self.db.add_targets(list(unique_ids), "discord")
                 added_any = True
-                self.log(f"[Scraper] Sukces! Dodano {len(unique_ids)} nowych celów do bazy.")
+                self.log(f"[Scraper] Success. Added {len(unique_ids)} new targets to the database.")
             
         except Exception as e:
-            self.log(f"[Scraper] Krytyczny błąd: {str(e)}")
+            self.log(f"[Scraper] Critical error: {str(e)}")
         
         self.is_scraping = False
         if on_complete:
@@ -163,10 +163,10 @@ class DiscordScraper:
         self.is_scraping = False
 
     def scrape_guild_members(self, token, guild_id, limit=1000, on_complete=None):
-        """Pobiera listę członków serwera przez /guilds/{id}/members."""
+        """Fetch server member list via /guilds/{id}/members."""
         self.is_scraping = True
         added_any = False
-        self.log(f"[Scraper] Rozpoczynanie pobierania member listy z guild {guild_id}...")
+        self.log(f"[Scraper] Starting member list fetch for guild {guild_id}...")
 
         headers = {"Authorization": token}
         url = f"https://discord.com/api/v9/guilds/{guild_id}/members"
@@ -190,11 +190,11 @@ class DiscordScraper:
 
                     if response.status_code == 429:
                         if rate_limit_attempt >= self.max_retries:
-                            self.log("[Scraper] Rate limit przekroczony. Kończę.")
+                            self.log("[Scraper] Rate limit exceeded. Stopping.")
                             break
                         scope = response.headers.get("X-RateLimit-Scope", "route")
                         scope_info = "global" if response.headers.get("X-RateLimit-Global") else scope
-                        self.log(f"[Scraper] Rate limit dla member listy ({scope_info}). Stosuję backoff...")
+                        self.log(f"[Scraper] Rate limit for member list ({scope_info}). Applying backoff...")
                         self._wait_for_rate_limit(response, rate_limit_attempt)
                         rate_limit_attempt += 1
                         continue
@@ -202,13 +202,13 @@ class DiscordScraper:
                         self._log_member_list_permission_error(response)
                         break
                     if response.status_code == 401:
-                        self.log("[Scraper] Token nieautoryzowany (HTTP 401).")
+                        self.log("[Scraper] Unauthorized token (HTTP 401).")
                         break
                     if response.status_code == 404:
-                        self.log("[Scraper] Nie znaleziono guildy (HTTP 404).")
+                        self.log("[Scraper] Guild not found (HTTP 404).")
                         break
                     if response.status_code != 200:
-                        self.log(f"[Scraper] Błąd: {response.status_code}")
+                        self.log(f"[Scraper] Error: {response.status_code}")
                         break
 
                     members = response.json()
@@ -227,16 +227,16 @@ class DiscordScraper:
                             unique_ids.add(u_id)
                         last_member_id = u_id
 
-                    self.log(f"[Scraper] Znaleziono unikalnych: {len(unique_ids)}...")
-                    self._wait_for_bucket_reset(response, "member listy")
+                    self.log(f"[Scraper] Found unique: {len(unique_ids)}...")
+                    self._wait_for_bucket_reset(response, "member list")
                     self._sleep_with_stop(1)
 
             if unique_ids:
                 self.db.add_targets(list(unique_ids), "discord")
                 added_any = True
-                self.log(f"[Scraper] Sukces! Dodano {len(unique_ids)} nowych celów do bazy.")
+                self.log(f"[Scraper] Success. Added {len(unique_ids)} new targets to the database.")
         except Exception as e:
-            self.log(f"[Scraper] Krytyczny błąd: {str(e)}")
+            self.log(f"[Scraper] Critical error: {str(e)}")
 
         self.is_scraping = False
         if on_complete:

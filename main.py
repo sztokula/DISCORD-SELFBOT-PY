@@ -14,7 +14,7 @@ from captcha_solver import CaptchaSolver
 from discord_worker import DiscordWorker
 from scraper import DiscordScraper
 from status_changer import StatusChanger
-from joiner import DiscordJoiner # Import nowego moduĹ‚u
+from joiner import DiscordJoiner # Import new module
 from token_manager import TokenManager
 from updater import UpdateManager, UpdateError
 from metrics import HealthMetrics
@@ -67,7 +67,7 @@ class MassDMApp(ctk.CTk):
         self.banlist_path = Path("banned_dead_tokens.txt")
 
         self.title(f"Mass-DM Farm Tool Pro v{APP_VERSION}")
-        self.geometry("1100x1000") # ZwiÄ™kszona wysokoĹ›Ä‡ na nowÄ… sekcjÄ™
+        self.geometry("1100x1000") # Increased height for the new section.
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -76,7 +76,7 @@ class MassDMApp(ctk.CTk):
         self.update_status_var = ctk.StringVar(value="Update: --")
         self.update_info = None
         self.manual_update_requested = False
-        self.notification_var = ctk.StringVar(value="Powiadomienia: --")
+        self.notification_var = ctk.StringVar(value="Notifications: --")
 
         # --- SIDEBAR ---
         self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
@@ -90,7 +90,7 @@ class MassDMApp(ctk.CTk):
         self.main_container = ctk.CTkFrame(self, fg_color="transparent")
         self.main_container.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
 
-        # 0. SEKCJA POWIADOMIEĹ
+        # 0. NOTIFICATION SECTION
         self.notification_frame = ctk.CTkFrame(self.main_container)
         self.notification_frame.pack(fill="x", pady=(0, 10))
         self.notification_label = ctk.CTkLabel(
@@ -131,24 +131,24 @@ class MassDMApp(ctk.CTk):
         ctk.CTkLabel(self.workflow_frame, text="Start Steps", font=ctk.CTkFont(size=16, weight="bold")).grid(
             row=0, column=0, columnspan=2, pady=10
         )
-        self.step_accounts_label = ctk.CTkLabel(self.workflow_frame, text="1. Konta: --", anchor="w")
+        self.step_accounts_label = ctk.CTkLabel(self.workflow_frame, text="1. Accounts: --", anchor="w")
         self.step_accounts_label.grid(row=1, column=0, padx=10, pady=2, sticky="w")
         self.step_proxies_label = ctk.CTkLabel(self.workflow_frame, text="2. Proxy: --", anchor="w")
         self.step_proxies_label.grid(row=2, column=0, padx=10, pady=2, sticky="w")
-        self.step_invites_label = ctk.CTkLabel(self.workflow_frame, text="3. Serwery: --", anchor="w")
+        self.step_invites_label = ctk.CTkLabel(self.workflow_frame, text="3. Servers: --", anchor="w")
         self.step_invites_label.grid(row=3, column=0, padx=10, pady=2, sticky="w")
         self.step_templates_label = ctk.CTkLabel(self.workflow_frame, text="4. Templates: --", anchor="w")
         self.step_templates_label.grid(row=4, column=0, padx=10, pady=2, sticky="w")
-        self.step_settings_label = ctk.CTkLabel(self.workflow_frame, text="5. Ustawienia: --", anchor="w")
+        self.step_settings_label = ctk.CTkLabel(self.workflow_frame, text="5. Settings: --", anchor="w")
         self.step_settings_label.grid(row=5, column=0, padx=10, pady=2, sticky="w")
 
         self.workflow_refresh_btn = ctk.CTkButton(self.workflow_frame, text="Refresh", command=self.refresh_workflow_status)
         self.workflow_refresh_btn.grid(row=1, column=1, padx=10, pady=5, sticky="e")
-        self.workflow_next_btn = ctk.CTkButton(self.workflow_frame, text="Dalej", command=self.advance_workflow)
+        self.workflow_next_btn = ctk.CTkButton(self.workflow_frame, text="Next", command=self.advance_workflow)
         self.workflow_next_btn.grid(row=2, column=1, padx=10, pady=5, sticky="e")
         self.workflow_action_btn = ctk.CTkButton(
             self.workflow_frame,
-            text="DOLACZ",
+            text="JOIN",
             fg_color="#f39c12",
             hover_color="#d35400",
             command=self._handle_join_action,
@@ -158,12 +158,12 @@ class MassDMApp(ctk.CTk):
 
         self._set_workflow_stage("setup")
 
-        # 1. SEKCJA WIADOMOĹšCI (przeniesiona do ustawien)
+        # 1. MESSAGE SECTION (moved to settings)
         self.friend_request_var = ctk.BooleanVar(value=False)
         self.settings_loaded = False
         self.workflow_stage = "setup"
 
-        # 2. SEKCJA LOGĂ“W
+        # 2. LOGS SECTION
         self.log_frame = ctk.CTkFrame(self.main_container)
         self.log_frame.pack(fill="both", expand=True, pady=10)
         self.log_controls = ctk.CTkFrame(self.log_frame, fg_color="transparent")
@@ -235,7 +235,7 @@ class MassDMApp(ctk.CTk):
         self.log_queue.put({"timestamp": timestamp, "message": message, "level": level})
 
     def log_error(self, message):
-        self.add_log(f"BĹ‚Ä…d: {message}")
+        self.add_log(f"Error: {message}")
 
     def _get_setting_bool(self, key, default=True):
         value = self.db.get_setting(key, None)
@@ -263,18 +263,18 @@ class MassDMApp(ctk.CTk):
         try:
             min_val = cast_type(min_raw)
         except (TypeError, ValueError):
-            self.log_error(f"{label} (min) musi byÄ‡ liczbÄ….")
+            self.log_error(f"{label} (min) must be a number.")
             return None
         try:
             max_val = cast_type(max_raw)
         except (TypeError, ValueError):
-            self.log_error(f"{label} (max) musi byÄ‡ liczbÄ….")
+            self.log_error(f"{label} (max) must be a number.")
             return None
         if min_val < min_value or max_val < min_value:
-            self.log_error(f"{label} musi byÄ‡ >= {min_value}.")
+            self.log_error(f"{label} must be >= {min_value}.")
             return None
         if min_val > max_val:
-            self.log_error(f"{label} min nie moĹĽe byÄ‡ wiÄ™kszy od max.")
+            self.log_error(f"{label} min cannot be greater than max.")
             return None
         return min_val, max_val
 
@@ -283,10 +283,10 @@ class MassDMApp(ctk.CTk):
         try:
             value = cast_type(raw)
         except (TypeError, ValueError):
-            self.log_error(f"{label} musi byÄ‡ liczbÄ….")
+            self.log_error(f"{label} must be a number.")
             return None
         if value < min_value:
-            self.log_error(f"{label} musi byÄ‡ >= {min_value}.")
+            self.log_error(f"{label} must be >= {min_value}.")
             return None
         return value
 
@@ -294,19 +294,19 @@ class MassDMApp(ctk.CTk):
         min_val = self._get_setting_number(min_key, None)
         max_val = self._get_setting_number(max_key, None)
         if min_val is None or max_val is None:
-            self.log_error(f"{label} nie jest ustawione. OtwĂłrz ustawienia.")
+            self.log_error(f"{label} is not set. Open settings.")
             return None
         try:
             min_val = cast_type(min_val)
             max_val = cast_type(max_val)
         except (TypeError, ValueError):
-            self.log_error(f"{label} ma niepoprawny format.")
+            self.log_error(f"{label} has an invalid format.")
             return None
         if min_val < min_value or max_val < min_value:
-            self.log_error(f"{label} musi byÄ‡ >= {min_value}.")
+            self.log_error(f"{label} must be >= {min_value}.")
             return None
         if min_val > max_val:
-            self.log_error(f"{label} min nie moĹĽe byÄ‡ wiÄ™kszy od max.")
+            self.log_error(f"{label} min cannot be greater than max.")
             return None
         return min_val, max_val
 
@@ -326,11 +326,11 @@ class MassDMApp(ctk.CTk):
         raw = self._get_message_templates_raw()
         if not raw:
             self.db.set_setting("message_templates", None)
-            self.add_log("[Templates] WyczyĹ›ciĹ‚em szablony wiadomoĹ›ci.")
+            self.add_log("[Templates] Cleared message templates.")
             self.refresh_workflow_status()
             return
         self.db.set_setting("message_templates", raw)
-        self.add_log("[Templates] Zapisano szablony wiadomoĹ›ci.")
+        self.add_log("[Templates] Saved message templates.")
         self.refresh_workflow_status()
 
     def _load_message_templates(self):
@@ -352,11 +352,11 @@ class MassDMApp(ctk.CTk):
         template_count = self._count_templates()
         settings_status = "tak" if self.settings_loaded else "nie"
 
-        self.step_accounts_label.configure(text=f"1. Konta: {account_count}")
+        self.step_accounts_label.configure(text=f"1. Accounts: {account_count}")
         self.step_proxies_label.configure(text=f"2. Proxy: {proxy_count}")
-        self.step_invites_label.configure(text=f"3. Serwery: {invite_count}")
+        self.step_invites_label.configure(text=f"3. Servers: {invite_count}")
         self.step_templates_label.configure(text=f"4. Templates: {template_count}")
-        self.step_settings_label.configure(text=f"5. Ustawienia: {settings_status}")
+        self.step_settings_label.configure(text=f"5. Settings: {settings_status}")
 
         can_next = account_count > 0 and invite_count > 0 and template_count > 0 and self.settings_loaded
         self.workflow_next_btn.configure(state="normal" if can_next else "disabled")
@@ -376,7 +376,7 @@ class MassDMApp(ctk.CTk):
         if stage == "join":
             self.workflow_next_btn.grid_remove()
             self.workflow_action_btn.configure(
-                text="DOLACZ",
+                text="JOIN",
                 fg_color="#f39c12",
                 hover_color="#d35400",
                 command=self._handle_join_action,
@@ -397,7 +397,7 @@ class MassDMApp(ctk.CTk):
         if stage == "dm":
             self.workflow_next_btn.grid_remove()
             self.workflow_action_btn.configure(
-                text="Wyslij DM",
+                text="Send DM",
                 fg_color="#2ecc71",
                 command=self._handle_dm_action,
                 state="normal" if dm_enabled else "disabled",
@@ -406,7 +406,7 @@ class MassDMApp(ctk.CTk):
 
     def _handle_join_action(self):
         if not self._get_saved_invites():
-            self.log_error("Brak zapisanych zaproszeĹ„. OtwĂłrz ustawienia i zapisz listÄ™ serwerĂłw.")
+            self.log_error("No saved invites. Open settings and save the server list.")
             return
         self.workflow_action_btn.configure(state="disabled")
         started = self.start_joining(on_complete=self._on_join_complete)
@@ -418,7 +418,7 @@ class MassDMApp(ctk.CTk):
             if success:
                 self._set_workflow_stage("scrape")
             else:
-                self.log_error("DoĹ‚Ä…czanie nie powiodĹ‚o siÄ™ lub przerwane.")
+                self.log_error("Joining failed or was cancelled.")
                 self.workflow_action_btn.configure(state="normal")
         self.after(0, _update)
 
@@ -433,7 +433,7 @@ class MassDMApp(ctk.CTk):
             if success:
                 self._set_workflow_stage("dm")
             else:
-                self.log_error("Scrapowanie nie powiodĹ‚o siÄ™ lub przerwane.")
+                self.log_error("Scraping failed or was cancelled.")
                 self.workflow_action_btn.configure(state="normal")
         self.after(0, _update)
 
@@ -464,10 +464,10 @@ class MassDMApp(ctk.CTk):
     def _validate_update_endpoint(self, endpoint: str):
         parsed = urlparse(endpoint)
         if parsed.scheme != "https":
-            return False, "Endpoint wersji musi używać https."
+            return False, "Version endpoint must use https."
         host = parsed.hostname
         if not host:
-            return False, "Nieprawidłowy host endpointu wersji."
+            return False, "Invalid version endpoint host."
         if host not in TRUSTED_UPDATE_HOSTS:
             return False, f"Nieufny host endpointu: {host}."
         return True, None
@@ -492,7 +492,7 @@ class MassDMApp(ctk.CTk):
         self.notification_label.configure(text_color=colors.get(level, "#8a8a8a"))
 
     def clear_notification(self):
-        self.notification_var.set("Powiadomienia: --")
+        self.notification_var.set("Notifications: --")
         self.notification_label.configure(text_color="#8a8a8a")
 
     def _format_duration(self, total_seconds):
@@ -536,13 +536,13 @@ class MassDMApp(ctk.CTk):
             self.add_log("[Settings] Zapisano endpoint wersji.")
         else:
             self.db.set_setting("version_endpoint", None)
-            self.add_log("[Settings] Usunięto endpoint wersji.")
+            self.add_log("[Settings] Removed version endpoint.")
 
     def check_for_updates(self):
         endpoint = self.version_endpoint_input.get().strip()
         if not endpoint:
-            self.log_error("Endpoint wersji jest pusty. Uzupełnij go w ustawieniach.")
-            self.show_notification("Brak endpointu wersji. Uzupełnij ustawienia.", level="error")
+            self.log_error("Version endpoint is empty. Fill it in settings.")
+            self.show_notification("Missing version endpoint. Update settings.", level="error")
             return
         ok, err = self._validate_update_endpoint(endpoint)
         if not ok:
@@ -568,37 +568,37 @@ class MassDMApp(ctk.CTk):
                 payload = response.read().decode("utf-8")
             data = json.loads(payload)
         except (URLError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-            self.add_log(f"[Updater] Nie udało się pobrać wersji: {exc}")
+            self.add_log(f"[Updater] Failed to fetch version: {exc}")
             self.after(0, lambda: self._set_version_status("Last check: error"))
-            self.after(0, lambda: self._handle_update_error("Błąd pobierania informacji o wersji."))
+            self.after(0, lambda: self._handle_update_error("Failed to fetch version info."))
             return
 
         updater = UpdateManager(Path(__file__).resolve().parent, self.add_log)
         try:
             updater._require_valid_signature(data)
         except UpdateError as exc:
-            self.add_log(f"[Updater] Podpis nieprawidłowy: {exc}")
+            self.add_log(f"[Updater] Invalid signature: {exc}")
             self.after(0, lambda: self._set_version_status("Last check: invalid signature"))
-            self.after(0, lambda: self._handle_update_error("Nieprawidłowy podpis aktualizacji."))
+            self.after(0, lambda: self._handle_update_error("Invalid update signature."))
             return
 
         latest = data.get("latest_version") or data.get("version")
         download_url = data.get("download_url") or data.get("url")
         files_payload = data.get("files")
         if not latest:
-            self.add_log("[Updater] Brak pola latest_version/version w odpowiedzi.")
+            self.add_log("[Updater] Missing latest_version/version field in response.")
             self.after(0, lambda: self._set_version_status("Last check: invalid response"))
             return
 
         comparison = self._compare_versions(APP_VERSION, latest)
         if comparison is None:
-            message = f"[Updater] Bieżąca wersja: {APP_VERSION}, najnowsza: {latest}."
+            message = f"[Updater] Current version: {APP_VERSION}, latest: {latest}."
         elif comparison < 0:
-            message = f"[Updater] Dostępna aktualizacja: {latest} (obecnie {APP_VERSION})."
+            message = f"[Updater] Update available: {latest} (current {APP_VERSION})."
         elif comparison == 0:
-            message = f"[Updater] Masz najnowszą wersję ({APP_VERSION})."
+            message = f"[Updater] You are on the latest version ({APP_VERSION})."
         else:
-            message = f"[Updater] Wersja lokalna ({APP_VERSION}) jest nowsza niż {latest}."
+            message = f"[Updater] Local version ({APP_VERSION}) is newer than {latest}."
         if download_url:
             message += f" Link: {download_url}"
         self.add_log(message)
@@ -606,46 +606,46 @@ class MassDMApp(ctk.CTk):
         if update_available:
             self.update_info = data
             self.after(0, lambda: self._set_update_button_state(True))
-            self.after(0, lambda: self._set_update_status("Update: dostępna"))
+            self.after(0, lambda: self._set_update_status("Update: available"))
         else:
             self.update_info = None
             self.after(0, lambda: self._set_update_button_state(False))
-            self.after(0, lambda: self._set_update_status("Update: brak"))
+            self.after(0, lambda: self._set_update_status("Update: none"))
         self.after(0, lambda: self._set_version_status(f"Last check: {latest}"))
         self.after(0, lambda: self._handle_update_result(latest, update_available))
 
     def _handle_update_result(self, latest, update_available):
         if update_available:
             self.show_notification(
-                f"Dostępna aktualizacja ({latest}). Możesz ją pobrać ręcznie.",
+                f"Update available ({latest}). You can download it manually.",
                 level="warning",
             )
         else:
-            self.show_notification("Brak nowych aktualizacji.", level="success")
+            self.show_notification("No new updates.", level="success")
 
         if self.manual_update_requested:
             self.manual_update_requested = False
             if update_available:
                 confirmed = messagebox.askyesno(
-                    "Aktualizacja",
-                    f"Dostępna jest aktualizacja {latest}. Czy pobrać i zainstalować teraz?",
+                    "Update",
+                    f"Update {latest} is available. Download and install now?",
                 )
                 if confirmed:
                     self.download_update()
             else:
-                messagebox.showinfo("Aktualizacja", "Brak dostępnych aktualizacji.")
+                messagebox.showinfo("Update", "No updates available.")
 
     def _handle_update_error(self, message):
         self.show_notification(message, level="error")
         if self.manual_update_requested:
             self.manual_update_requested = False
-            messagebox.showerror("Aktualizacja", message)
+            messagebox.showerror("Update", message)
 
     def download_update(self):
         endpoint = self.version_endpoint_input.get().strip()
         if not endpoint:
-            self.log_error("Endpoint wersji jest pusty. Uzupełnij go w ustawieniach.")
-            self.show_notification("Brak endpointu wersji. Uzupełnij ustawienia.", level="error")
+            self.log_error("Version endpoint is empty. Fill it in settings.")
+            self.show_notification("Missing version endpoint. Update settings.", level="error")
             return
         ok, err = self._validate_update_endpoint(endpoint)
         if not ok:
@@ -653,10 +653,10 @@ class MassDMApp(ctk.CTk):
             self.show_notification(err, level="error")
             return
         self.db.set_setting("version_endpoint", endpoint)
-        self.add_log("[Updater] Pobieranie aktualizacji...")
+        self.add_log("[Updater] Downloading update...")
         self._set_update_button_state(False)
-        self._set_update_status("Update: pobieranie...")
-        self.show_notification("Pobieranie aktualizacji...", level="info")
+        self._set_update_status("Update: downloading...")
+        self.show_notification("Downloading update...", level="info")
         threading.Thread(
             target=self._download_update_worker,
             args=(endpoint,),
@@ -669,33 +669,33 @@ class MassDMApp(ctk.CTk):
                 payload = response.read().decode("utf-8")
             data = json.loads(payload)
         except (URLError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-            self.add_log(f"[Updater] Nie udaĹ‚o siÄ™ pobraÄ‡ aktualizacji: {exc}")
-            self.after(0, lambda: self._set_update_status("Update: bĹ‚Ä…d pobierania"))
+            self.add_log(f"[Updater] Failed to download update: {exc}")
+            self.after(0, lambda: self._set_update_status("Update: download error"))
             self.after(0, lambda: self._set_update_button_state(True))
-            self.after(0, lambda: self.show_notification("BĹ‚Ä…d pobierania aktualizacji.", level="error"))
+            self.after(0, lambda: self.show_notification("Update download error.", level="error"))
             return
 
         updater = UpdateManager(Path(__file__).resolve().parent, self.add_log)
         try:
             updater.download_and_apply(data)
         except UpdateError as exc:
-            self.add_log(f"[Updater] Aktualizacja nieudana: {exc}")
-            self.after(0, lambda: self._set_update_status("Update: bĹ‚Ä…d walidacji"))
+            self.add_log(f"[Updater] Update failed: {exc}")
+            self.after(0, lambda: self._set_update_status("Update: validation error"))
             self.after(0, lambda: self._set_update_button_state(True))
-            self.after(0, lambda: self.show_notification("Aktualizacja nieudana.", level="error"))
+            self.after(0, lambda: self.show_notification("Update failed.", level="error"))
             return
 
-        self.add_log("[Updater] Aktualizacja zakoĹ„czona. Uruchom ponownie aplikacjÄ™.")
-        self.after(0, lambda: self._set_update_status("Update: zainstalowana"))
-        self.after(0, lambda: self.show_notification("Aktualizacja zainstalowana. Uruchom ponownie aplikacjÄ™.", level="success"))
+        self.add_log("[Updater] Update finished. Restart the app.")
+        self.after(0, lambda: self._set_update_status("Update: installed"))
+        self.after(0, lambda: self.show_notification("Update installed. Restart the app.", level="success"))
 
     def validate_token_format(self, token):
         if not token:
-            self.log_error("Niepoprawny token: puste pole.")
+            self.log_error("Invalid token: empty field.")
             return False
         token_pattern = re.compile(r"^[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+$")
         if not token_pattern.match(token) or len(token) < 50:
-            self.log_error("Niepoprawny format tokena.")
+            self.log_error("Invalid token format.")
             return False
         return True
 
@@ -705,13 +705,13 @@ class MassDMApp(ctk.CTk):
         parsed = urlparse(proxy)
         if parsed.scheme and parsed.hostname and parsed.port:
             if parsed.scheme not in {"http", "https", "socks5"}:
-                self.log_error("Niepoprawny format proxy.")
+                self.log_error("Invalid proxy format.")
                 return False
             return True
         parsed = urlparse(f"http://{proxy}")
         if parsed.hostname and parsed.port:
             return True
-        self.log_error("Niepoprawny format proxy.")
+        self.log_error("Invalid proxy format.")
         return False
 
     def normalize_invite(self, invite):
@@ -740,10 +740,10 @@ class MassDMApp(ctk.CTk):
 
     def is_valid_channel_id(self, channel_id):
         if not channel_id:
-            self.log_error("Niepoprawny Channel ID: puste pole.")
+            self.log_error("Invalid Channel ID: empty field.")
             return False
         if not re.match(r"^\d{17,20}$", channel_id):
-            self.log_error("Niepoprawny format Channel ID.")
+            self.log_error("Invalid Channel ID format.")
             return False
         return True
 
@@ -754,18 +754,18 @@ class MassDMApp(ctk.CTk):
         try:
             limit = int(value)
         except ValueError:
-            self.log_error("Niepoprawny format Range. Użyj liczby całkowitej.")
+            self.log_error("Invalid Range format. Use an integer.")
             return None
         if limit <= 0:
-            self.log_error("Range musi być większy od zera.")
+            self.log_error("Range must be greater than zero.")
             return None
         return limit
     def is_valid_guild_id(self, guild_id):
         if not guild_id:
-            self.log_error("Niepoprawny Guild ID: puste pole.")
+            self.log_error("Invalid Guild ID: empty field.")
             return False
         if not re.match(r"^\d{17,20}$", guild_id):
-            self.log_error("Niepoprawny format Guild ID.")
+            self.log_error("Invalid Guild ID format.")
             return False
         return True
 
@@ -813,9 +813,9 @@ class MassDMApp(ctk.CTk):
 
     def _get_log_level(self, message):
         normalized = message.strip().casefold()
-        if "bĹ‚Ä…d" in normalized or normalized.startswith("[!]"):
+        if "error" in normalized or normalized.startswith("[!]"):
             return "Error"
-        if normalized.startswith("ostrzeĹĽenie") or normalized.startswith("warning"):
+        if normalized.startswith("warning"):
             return "Warning"
         return "Info"
 
@@ -873,15 +873,15 @@ class MassDMApp(ctk.CTk):
         try:
             dm_limit = int(dm_limit_raw) if dm_limit_raw else 15
         except ValueError:
-            self.log_error("Limit DM musi byÄ‡ liczbÄ… caĹ‚kowitÄ….")
+            self.log_error("DM limit must be an integer.")
             return
         try:
             join_limit = int(join_limit_raw) if join_limit_raw else 5
         except ValueError:
-            self.log_error("Limit joinĂłw musi byÄ‡ liczbÄ… caĹ‚kowitÄ….")
+            self.log_error("Join limit must be an integer.")
             return
         if dm_limit <= 0 or join_limit <= 0:
-            self.log_error("Limity muszÄ… byÄ‡ wiÄ™ksze od zera.")
+            self.log_error("Limits must be greater than zero.")
             return
         self.add_acc_btn.configure(state="disabled")
         thread = threading.Thread(
@@ -903,13 +903,13 @@ class MassDMApp(ctk.CTk):
     def _handle_add_account_result(self, token, proxy, dm_limit, join_limit, status, info):
         try:
             if status == "unauthorized":
-                self.log_error(f"Token niepoprawny: {info}.")
+                self.log_error(f"Invalid token: {info}.")
                 return
 
             initial_status = "Active" if status == "ok" else "Unverified"
             account_id = self.db.add_account("discord", token, proxy, dm_limit, join_limit, initial_status)
             if not account_id:
-                self.log_error("Konto juĹĽ istnieje lub token jest niepoprawny.")
+                self.log_error("Account already exists or token is invalid.")
                 return
 
             if status == "ok":
@@ -927,7 +927,7 @@ class MassDMApp(ctk.CTk):
 
     def _schedule_account_recheck(self, account_id, token, proxy, attempt=1):
         if attempt > self.max_unverified_retries:
-            self.add_log(f"[Accounts] Konto {account_id}: nadal niezweryfikowane, koniec prob.")
+            self.add_log(f"[Accounts] Account {account_id}: still unverified, stopping retries.")
             return
         timer = threading.Timer(
             self.unverified_retry_delay_seconds,
@@ -947,16 +947,16 @@ class MassDMApp(ctk.CTk):
     def _handle_account_recheck_result(self, account_id, status, info, token, proxy, attempt):
         if status == "ok":
             self.db.update_account_status(account_id, "Active")
-            self.add_log(f"[Accounts] Konto {account_id} zweryfikowane: {info}.")
+            self.add_log(f"[Accounts] Account {account_id} verified: {info}.")
             self.refresh_accounts_overview()
             return
         if status == "unauthorized":
-            self.log_error(f"[Accounts] Konto {account_id} niepoprawne: {info}. Usuwam.")
+            self.log_error(f"[Accounts] Account {account_id} invalid: {info}. Removing.")
             self.db.update_account_status(account_id, "Banned/Dead")
             self.db.remove_account(account_id)
             self.refresh_accounts_overview()
             return
-        self.add_log(f"[Accounts] Konto {account_id}: weryfikacja odroczona ({info}).")
+        self.add_log(f"[Accounts] Account {account_id}: verification deferred ({info}).")
         self._schedule_account_recheck(account_id, token, proxy, attempt=attempt + 1)
 
     def _reset_add_account_form(self):
@@ -982,7 +982,7 @@ class MassDMApp(ctk.CTk):
             else:
                 invalid.append(line)
         if invalid and log_invalid:
-            self.log_error(f"Niepoprawne zaproszenia (pomijam): {', '.join(invalid)}")
+            self.log_error(f"Invalid invites (skipping): {', '.join(invalid)}")
         return normalized
 
     def _get_saved_invites(self):
@@ -995,15 +995,15 @@ class MassDMApp(ctk.CTk):
         raw_text = self.invite_input.get("1.0", "end").strip()
         if not raw_text:
             self.db.set_setting("join_invites", None)
-            self.add_log("[Joiner] WyczyĹ›ciĹ‚em listÄ™ zaproszeĹ„.")
+            self.add_log("[Joiner] Cleared invite list.")
             self.refresh_workflow_status()
             return
         invites = self._get_invite_list(raw_text, log_invalid=True)
         if not invites:
-            self.log_error("Brak poprawnych zaproszeĹ„ do zapisania.")
+            self.log_error("No valid invites to save.")
             return
         self.db.set_setting("join_invites", "\n".join(invites))
-        self.add_log(f"[Joiner] Zapisano {len(invites)} zaproszeĹ„.")
+        self.add_log(f"[Joiner] Saved {len(invites)} invites.")
         self.refresh_workflow_status()
 
     def _load_invite_settings(self):
@@ -1016,11 +1016,11 @@ class MassDMApp(ctk.CTk):
 
     def start_joining(self, on_complete=None):
         if not self.module_vars["joiner"].get():
-            self.log_error("ModuĹ‚ Joiner jest wyĹ‚Ä…czony.")
+            self.log_error("Joiner module is disabled.")
             return False
         invites = self._get_saved_invites()
         if not invites:
-            self.log_error("Brak zapisanych zaproszeĹ„. OtwĂłrz ustawienia i zapisz listÄ™ serwerĂłw.")
+            self.log_error("No saved invites. Open settings and save the server list.")
             return False
         if hasattr(self, "join_delay_min_input") and self.join_delay_min_input.winfo_exists():
             join_delay = self._parse_delay_range(
@@ -1053,10 +1053,10 @@ class MassDMApp(ctk.CTk):
 
     def start_scraping(self, on_complete=None):
         if not self.module_vars["scraper"].get():
-            self.log_error("Moduł Scraper jest wyłączony.")
+            self.log_error("Scraper module is disabled.")
             return False
         if not hasattr(self, "token_input") or not self.token_input.winfo_exists():
-            self.log_error("Otwórz ustawienia i wprowadź token do scrapowania.")
+            self.log_error("Open settings and enter a scraping token.")
             return False
         token = self.token_input.get().strip()
         channel_id = self.scrape_channel_input.get().strip()
@@ -1078,10 +1078,10 @@ class MassDMApp(ctk.CTk):
 
     def start_guild_scraping(self, on_complete=None):
         if not self.module_vars["scraper"].get():
-            self.log_error("Moduł Scraper jest wyłączony.")
+            self.log_error("Scraper module is disabled.")
             return False
         if not hasattr(self, "token_input") or not self.token_input.winfo_exists():
-            self.log_error("Otwórz ustawienia i wprowadź token do scrapowania.")
+            self.log_error("Open settings and enter a scraping token.")
             return False
         token = self.token_input.get().strip()
         guild_id = self.scrape_guild_input.get().strip()
@@ -1103,7 +1103,7 @@ class MassDMApp(ctk.CTk):
 
     def start_status_update(self):
         if not self.module_vars["status"].get():
-            self.log_error("ModuĹ‚ Status jest wyĹ‚Ä…czony.")
+            self.log_error("Status module is disabled.")
             return
         status_type = self.status_type_var.get()
         custom_text = self.status_text_input.get()
@@ -1132,15 +1132,15 @@ class MassDMApp(ctk.CTk):
 
     def start_mission(self):
         if not self.module_vars["dm"].get():
-            self.log_error("ModuĹ‚ DM jest wyĹ‚Ä…czony.")
+            self.log_error("DM module is disabled.")
             return
         raw = self._get_message_templates_raw()
         if not raw:
-            self.log_error("Pusta wiadomoĹ›Ä‡.")
+            self.log_error("Empty message.")
             return
         templates = [tpl.strip() for tpl in re.split(r"\n-{3,}\n", raw) if tpl.strip()]
         if not templates:
-            self.log_error("Brak poprawnych szablonĂłw wiadomoĹ›ci.")
+            self.log_error("No valid message templates.")
             return
         if hasattr(self, "dm_delay_min_input") and self.dm_delay_min_input.winfo_exists():
             dm_delay = self._parse_delay_range(
@@ -1229,15 +1229,15 @@ class MassDMApp(ctk.CTk):
     def remove_account_by_id(self):
         raw_id = self.remove_account_input.get().strip()
         if not raw_id:
-            self.log_error("Podaj ID konta do usuniÄ™cia.")
+            self.log_error("Enter an account ID to remove.")
             return
         try:
             account_id = int(raw_id)
         except ValueError:
-            self.log_error("ID konta musi byÄ‡ liczbÄ….")
+            self.log_error("Account ID must be a number.")
             return
         self.db.remove_account(account_id)
-        self.add_log(f"[Accounts] UsuniÄ™to konto {account_id}.")
+        self.add_log(f"[Accounts] Removed account {account_id}.")
         self.remove_account_input.delete(0, "end")
         self.refresh_accounts_overview()
 
@@ -1245,7 +1245,7 @@ class MassDMApp(ctk.CTk):
         accounts = self.db.get_accounts_overview()
         self.acc_overview_box.delete("1.0", "end")
         if not accounts:
-            self.acc_overview_box.insert("end", "Brak kont w bazie.\n")
+            self.acc_overview_box.insert("end", "No accounts in database.\n")
             self.refresh_workflow_status()
             return
         self.acc_overview_box.insert("end", "ID | Status | DM sent/limit | Join sent/limit | Proxy\n")
@@ -1294,7 +1294,7 @@ class MassDMApp(ctk.CTk):
                     else:
                         invalid.append(value)
         except OSError as exc:
-            self.log_error(f"Nie moĹĽna odczytaÄ‡ pliku: {exc}")
+            self.log_error(f"Unable to read file: {exc}")
             return [], []
         unique_ids = list(dict.fromkeys(ids))
         return unique_ids, invalid
@@ -1303,35 +1303,35 @@ class MassDMApp(ctk.CTk):
         raw = self.target_input.get("1.0", "end")
         ids, invalid = self._parse_user_ids(raw)
         if not ids:
-            self.log_error("Brak poprawnych ID do dodania.")
+            self.log_error("No valid IDs to add.")
             return
         if invalid:
-            self.log_error(f"Niepoprawne ID (pomijam): {', '.join(invalid)}")
+            self.log_error(f"Invalid IDs (skipping): {', '.join(invalid)}")
         self.db.add_targets(ids, "discord")
-        self.add_log(f"[Targets] Dodano {len(ids)} celĂłw.")
+        self.add_log(f"[Targets] Added {len(ids)} targets.")
         self.target_input.delete("1.0", "end")
         self.refresh_targets_overview()
 
     def import_targets_from_file(self):
         file_path = filedialog.askopenfilename(
-            title="Wybierz plik .txt z ID",
+            title="Select a .txt file with IDs",
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
         )
         if not file_path:
             return
         ids, invalid = self._parse_user_ids_from_file(file_path)
         if not ids:
-            self.log_error("Brak poprawnych ID w pliku.")
+            self.log_error("No valid IDs in file.")
             return
         if invalid:
-            self.log_error(f"Niepoprawne ID (pomijam): {', '.join(invalid)}")
+            self.log_error(f"Invalid IDs (skipping): {', '.join(invalid)}")
         self.db.add_targets(ids, "discord")
-        self.add_log(f"[Targets] Zaimportowano {len(ids)} celĂłw z pliku.")
+        self.add_log(f"[Targets] Imported {len(ids)} targets from file.")
         self.refresh_targets_overview()
 
     def clear_targets(self):
         self.db.clear_targets()
-        self.add_log("[Targets] Lista celĂłw wyczyszczona.")
+        self.add_log("[Targets] Target list cleared.")
         self.refresh_targets_overview()
 
     def refresh_targets_overview(self):
@@ -1345,7 +1345,7 @@ class MassDMApp(ctk.CTk):
         targets = self.db.get_targets(limit=50)
         self.target_overview_box.delete("1.0", "end")
         if not targets:
-            self.target_overview_box.insert("end", "Brak celĂłw w bazie.\n")
+            self.target_overview_box.insert("end", "No targets in database.\n")
             return
         for user_id, status in targets:
             self.target_overview_box.insert("end", f"{user_id} | {status}\n")
@@ -1354,19 +1354,19 @@ class MassDMApp(ctk.CTk):
         self.banlist_box.delete("1.0", "end")
         if not self.banlist_path.exists():
             self.banlist_summary_label.configure(text="Banlist: 0")
-            self.banlist_box.insert("end", "Brak wpisĂłw w banliĹ›cie.\n")
+            self.banlist_box.insert("end", "No entries in banlist.\n")
             return
         try:
             lines = self.banlist_path.read_text(encoding="utf-8").splitlines()
         except OSError as exc:
-            self.log_error(f"Nie moĹĽna odczytaÄ‡ banlisty: {exc}")
+            self.log_error(f"Unable to read banlist: {exc}")
             self.banlist_summary_label.configure(text="Banlist: ?")
-            self.banlist_box.insert("end", "Nie udaĹ‚o siÄ™ odczytaÄ‡ banlisty.\n")
+            self.banlist_box.insert("end", "Failed to read banlist.\n")
             return
         entries = [line for line in lines if line.strip()]
         self.banlist_summary_label.configure(text=f"Banlist: {len(entries)}")
         if not entries:
-            self.banlist_box.insert("end", "Brak wpisĂłw w banliĹ›cie.\n")
+            self.banlist_box.insert("end", "No entries in banlist.\n")
             return
         self.banlist_box.insert("end", "Timestamp | Token\n")
         self.banlist_box.insert("end", "-" * 80 + "\n")
@@ -1386,7 +1386,7 @@ class MassDMApp(ctk.CTk):
             "export_banned_tokens_plaintext",
             self.export_banned_tokens_plaintext_var.get(),
         )
-        status = "włączony" if self.export_banned_tokens_plaintext_var.get() else "wyłączony"
+        status = "enabled" if self.export_banned_tokens_plaintext_var.get() else "disabled"
         self.add_log(f"[Settings] Eksport banlisty plaintext: {status}.")
 
     def apply_module_states(self):
@@ -1524,7 +1524,7 @@ class MassDMApp(ctk.CTk):
         self.add_log("[Settings] Zapisano ustawienia delay.")
 
     def _build_settings_sections(self, parent):
-        # 1. SEKCA KONFIGURACJI (Konta + Proxy)
+        # 1. CONFIGURATION SECTION (Accounts + Proxy)
         self.acc_frame = ctk.CTkFrame(parent)
         self.acc_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.acc_frame, text="Account & Proxy Management", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
@@ -1582,7 +1582,7 @@ class MassDMApp(ctk.CTk):
         ctk.CTkLabel(self.msg_frame, text="Message Templates", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=5)
         ctk.CTkLabel(
             self.msg_frame,
-            text="Szablony oddzielaj liniÄ…: --- | Tokeny: [[tag]], [[emoji]], [[num]], [[num:1-99]] | Spintax: {a|b}",
+            text="Separate templates with line: --- | Tokens: [[tag]], [[emoji]], [[num]], [[num:1-99]] | Spintax: {a|b}",
             font=ctk.CTkFont(size=12),
             text_color="#b0b0b0",
         ).pack(pady=(0, 5))
@@ -1590,7 +1590,7 @@ class MassDMApp(ctk.CTk):
         self.msg_input.pack(fill="x", padx=20, pady=10)
         self.friend_request_toggle = ctk.CTkCheckBox(
             self.msg_frame,
-            text="WyĹ›lij zaproszenie do znajomych przed DM",
+            text="Send friend request before DM",
             variable=self.friend_request_var,
         )
         self.friend_request_toggle.pack(anchor="w", padx=20, pady=(0, 10))
@@ -1662,7 +1662,7 @@ class MassDMApp(ctk.CTk):
         self.delay_save_btn = ctk.CTkButton(self.delay_frame, text="Save Delays", command=self.save_delay_settings)
         self.delay_save_btn.grid(row=7, column=0, padx=10, pady=10, sticky="w")
 
-        # 2. SEKCJA JOINERA (NOWOĹšÄ†)
+        # 2. JOINER SECTION (NEW)
         self.joiner_frame = ctk.CTkFrame(parent)
         self.joiner_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.joiner_frame, text="Server Joiner (Mass Join)", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
@@ -1747,7 +1747,7 @@ class MassDMApp(ctk.CTk):
         self.target_frame.grid_columnconfigure(0, weight=1)
         self.target_add_btn = ctk.CTkButton(self.target_frame, text="Add Targets", command=self.add_targets_from_input)
         self.target_add_btn.grid(row=1, column=1, padx=10, pady=5)
-        self.target_import_btn = ctk.CTkButton(self.target_frame, text="Import z pliku (.txt)", command=self.import_targets_from_file)
+        self.target_import_btn = ctk.CTkButton(self.target_frame, text="Import from file (.txt)", command=self.import_targets_from_file)
         self.target_import_btn.grid(row=1, column=2, padx=10, pady=5)
         self.target_clear_btn = ctk.CTkButton(self.target_frame, text="Clear List", fg_color="#e67e22", command=self.clear_targets)
         self.target_clear_btn.grid(row=2, column=1, padx=10, pady=5)
@@ -1869,7 +1869,7 @@ class MassDMApp(ctk.CTk):
         if ok:
             self.add_log(f"[Captcha] OK ({provider}) - {msg}")
         else:
-            self.add_log(f"[Captcha] BĹ‚Ä…d ({provider}) - {msg}")
+            self.add_log(f"[Captcha] Error ({provider}) - {msg}")
 
 if __name__ == "__main__":
     app = MassDMApp()

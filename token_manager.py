@@ -52,7 +52,7 @@ class TokenManager:
         return "retry", info
 
     def check_all_accounts(self):
-        self.log("[Checker] Rozpoczynam weryfikację bazy tokenów...")
+        self.log("[Checker] Starting token database verification...")
         accounts = self.db.get_active_accounts("discord")
         
         valid_count = 0
@@ -67,16 +67,16 @@ class TokenManager:
                 status, info = self._fetch_token_info(token)
 
             if status == "ok":
-                self.log(f"[OK] Konto {acc_id}: {info}")
+                self.log(f"[OK] Account {acc_id}: {info}")
                 valid_count += 1
                 continue
 
             if status == "unauthorized":
-                self.log(f"[DEAD] Konto {acc_id}: {info}. Dezaktywuję w bazie.")
+                self.log(f"[DEAD] Account {acc_id}: {info}. Deactivating in database.")
                 self.db.update_account_status(acc_id, "Banned/Dead")
                 self.db.remove_account(acc_id)
                 continue
 
-            self.log(f"[WARN] Konto {acc_id}: {info}. Pomijam usuwanie (sprobuj ponownie pozniej).")
+            self.log(f"[WARN] Account {acc_id}: {info}. Skipping removal (retry later).")
         
-        self.log(f"[Checker] Zakończono. Aktywne: {valid_count}/{len(accounts)}")
+        self.log(f"[Checker] Done. Active: {valid_count}/{len(accounts)}")

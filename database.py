@@ -49,7 +49,7 @@ class DatabaseManager:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(key, encoding="utf-8")
         except OSError as exc:
-            raise RuntimeError(f"Nie mozna zapisac klucza szyfrowania w {path}: {exc}") from exc
+            raise RuntimeError(f"Unable to save encryption key in {path}: {exc}") from exc
 
     def _build_fernet(self, key: str, source: str):
         try:
@@ -58,7 +58,7 @@ class DatabaseManager:
             if len(key) == 32:
                 encoded_key = base64.urlsafe_b64encode(key.encode("utf-8"))
                 return Fernet(encoded_key)
-            raise RuntimeError(f"Klucz szyfrowania ({source}) ma nieprawidlowy format.")
+            raise RuntimeError(f"Encryption key ({source}) has an invalid format.")
 
     def _init_fernet(self):
         key = os.getenv("TOKEN_ENCRYPTION_KEY", "").strip()
@@ -86,14 +86,14 @@ class DatabaseManager:
             return self.fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8")
         except InvalidToken:
             if self.log:
-                self.log("[Accounts] NieprawidĹ‚owy klucz szyfrowania tokenĂłw.")
+                self.log("[Accounts] Invalid token encryption key.")
             return None
 
     def init_db(self):
         with self.write_lock:
             conn = self.get_connection()
             cursor = conn.cursor()
-            # Tabela kont (zachowujemy kolumnÄ™ proxy)
+            # Accounts table (keep proxy column).
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS accounts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,7 +124,7 @@ class DatabaseManager:
                 CREATE INDEX IF NOT EXISTS idx_last_dm_target
                 ON last_dm (target_user_id)
             ''')
-            # Tabela celĂłw
+            # Targets table.
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS targets (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -218,7 +218,7 @@ class DatabaseManager:
             decrypted = self._decrypt_token(acc_list[2])
             if not decrypted:
                 if self.log:
-                    self.log(f"[Accounts] Pomijam konto {acc_list[0]} - nieprawidĹ‚owy klucz szyfrowania.")
+                    self.log(f"[Accounts] Skipping account {acc_list[0]} - invalid encryption key.")
                 continue
             acc_list[2] = decrypted
             base_limit = acc_list[5]
@@ -239,7 +239,7 @@ class DatabaseManager:
             return None
         decrypted = self._decrypt_token(row[0])
         if not decrypted and self.log:
-            self.log(f"[Accounts] NieprawidĹ‚owy klucz szyfrowania dla konta {account_id}.")
+            self.log(f"[Accounts] Invalid encryption key for account {account_id}.")
         return decrypted
 
     def reset_daily_counters(self, reference_datetime=None):

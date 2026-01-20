@@ -50,7 +50,7 @@ class UpdateManager:
 
         download_url = update_data.get("download_url") or update_data.get("url")
         if not download_url:
-            raise UpdateError("Brak download_url/url w odpowiedzi aktualizacji.")
+            raise UpdateError("Missing download_url/url in update response.")
         expected_hash = update_data.get("sha256") or update_data.get("checksum")
         self._apply_archive_update(download_url, expected_hash)
 
@@ -63,10 +63,10 @@ class UpdateManager:
             applied = []
             for update_file in update_files:
                 if self._is_excluded(update_file.path):
-                    self.logger(f"[Updater] Pomijam plik z listy wykluczeń: {update_file.path}")
+                    self.logger(f"[Updater] Skipping excluded file: {update_file.path}")
                     continue
                 if not update_file.url:
-                    raise UpdateError(f"Brak URL dla pliku {update_file.path}.")
+                    raise UpdateError(f"Missing URL for file {update_file.path}.")
                 dest = tmp_path / update_file.path
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 self._download_file(update_file.url, dest)
@@ -81,15 +81,15 @@ class UpdateManager:
                     applied.append(self._replace_file_with_backup(source, target, backup_root))
             except UpdateError as exc:
                 self._rollback_replacements(applied)
-                raise UpdateError(f"Aktualizacja przerwana: {exc}") from exc
+                raise UpdateError(f"Update aborted: {exc}") from exc
 
     def _require_valid_signature(self, update_data: dict) -> None:
         signature = update_data.get("signature")
         if not signature:
-            raise UpdateError("Brak podpisu aktualizacji (signature).")
+            raise UpdateError("Missing update signature (signature).")
         signing_key = os.getenv(self.SIGNING_KEY_ENV, "").strip()
         if not signing_key:
-            raise UpdateError("Brak klucza podpisu. Ustaw UPDATE_SIGNING_KEY w środowisku.")
+            raise UpdateError("Missing signing key. Set UPDATE_SIGNING_KEY in the environment.")
         canonical = self._canonicalize_payload(update_data)
         expected = hmac.new(
             signing_key.encode("utf-8"),
@@ -97,7 +97,7 @@ class UpdateManager:
             hashlib.sha256,
         ).hexdigest()
         if not hmac.compare_digest(expected.lower(), str(signature).lower()):
-            raise UpdateError("Nieprawidłowy podpis aktualizacji.")
+            raise UpdateError("Invalid update signature.")
 
     def _canonicalize_payload(self, update_data: dict) -> str:
         data = dict(update_data)
@@ -120,18 +120,18 @@ class UpdateManager:
                 self._safe_extract(archive, extract_dir)
             manifest_path = self._find_manifest(extract_dir)
             if not manifest_path:
-                raise UpdateError("Brak manifestu aktualizacji (manifest.json/update_manifest.json).")
+                raise UpdateError("Missing update manifest (manifest.json/update_manifest.json).")
             manifest = self._load_manifest(manifest_path)
             update_files = self._parse_files_payload(manifest.get("files", []))
             if not update_files:
-                raise UpdateError("Manifest nie zawiera listy plików.")
+                raise UpdateError("Manifest does not contain a file list.")
 
             for update_file in update_files:
                 if self._is_excluded(update_file.path):
                     continue
                 source_path = extract_dir / update_file.path
                 if not source_path.is_file():
-                    raise UpdateError(f"Brak pliku w paczce: {update_file.path}.")
+                    raise UpdateError(f"Missing file in package: {update_file.path}.")
                 self._validate_sha256(source_path, update_file.sha256)
 
             try:
@@ -143,7 +143,7 @@ class UpdateManager:
                     applied.append(self._replace_file_with_backup(source_path, target_path, backup_root))
             except UpdateError as exc:
                 self._rollback_replacements(applied)
-                raise UpdateError(f"Aktualizacja przerwana: {exc}") from exc
+                raise UpdateError(f"Update aborted: {exc}") from exc
 
     def _safe_extract(self, archive: zipfile.ZipFile, extract_dir: Path) -> None:
         base = extract_dir.resolve()
@@ -153,12 +153,12 @@ class UpdateManager:
                 continue
             member_path = Path(filename)
             if member_path.is_absolute() or member_path.drive or ".." in member_path.parts:
-                raise UpdateError(f"Nieprawidłowa ścieżka w paczce: {filename}.")
+                raise UpdateError(f"Invalid path in package: {filename}.")
             target_path = (extract_dir / member_path).resolve()
             try:
                 target_path.relative_to(base)
             except ValueError:
-                raise UpdateError(f"Nieprawidłowa ścieżka w paczce: {filename}.")
+                raise UpdateError(f"Invalid path in package: {filename}.")
             archive.extract(member, extract_dir)
 
     def _create_staging_root(self) -> Path:
@@ -168,7 +168,7 @@ class UpdateManager:
 
     def _stage_file(self, source: Path, target: Path, root: Path) -> None:
         if not self._is_safe_path_for_root(target, root):
-            raise UpdateError(f"Nieprawidłowa ścieżka docelowa: {target}.")
+            raise UpdateError(f"Invalid target path: {target}.")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
 
@@ -182,7 +182,7 @@ class UpdateManager:
     def _swap_staged_root(self, staging_root: Path) -> None:
         backup_root = self.app_root.with_name(self.app_root.name + ".backup")
         if backup_root.exists():
-            raise UpdateError(f"Katalog kopii zapasowej już istnieje: {backup_root}.")
+            raise UpdateError(f"Backup directory already exists: {backup_root}.")
         try:
             os.replace(self.app_root, backup_root)
             os.replace(staging_root, self.app_root)
@@ -197,7 +197,7 @@ class UpdateManager:
                     shutil.rmtree(staging_root)
                 except OSError:
                     pass
-            raise UpdateError(f"Nie udało się podmienić katalogu aplikacji: {exc}") from exc
+            raise UpdateError(f"Failed to swap application directory: {exc}") from exc
         try:
             shutil.rmtree(backup_root)
         except OSError:
@@ -208,7 +208,7 @@ class UpdateManager:
             with request.urlopen(url, timeout=30) as response, destination.open("wb") as output:
                 shutil.copyfileobj(response, output)
         except (URLError, OSError) as exc:
-            raise UpdateError(f"Nie udaĹ‚o siÄ™ pobraÄ‡ pliku z {url}: {exc}") from exc
+            raise UpdateError(f"Failed to download file from {url}: {exc}") from exc
 
     def _validate_sha256(self, file_path: Path, expected_hash: str) -> None:
         file_hash = hashlib.sha256()
@@ -218,21 +218,21 @@ class UpdateManager:
         digest = file_hash.hexdigest()
         if digest.lower() != expected_hash.lower():
             raise UpdateError(
-                f"Hash SHA256 niezgodny dla {file_path.name}: {digest} (oczekiwano {expected_hash})."
+                f"SHA256 hash mismatch for {file_path.name}: {digest} (expected {expected_hash})."
             )
 
     def _replace_file(self, source: Path, target: Path) -> None:
         if not self._is_safe_path(target):
-            raise UpdateError(f"NieprawidĹ‚owa Ĺ›cieĹĽka docelowa: {target}.")
+            raise UpdateError(f"Invalid target path: {target}.")
         target.parent.mkdir(parents=True, exist_ok=True)
         temp_target = target.with_suffix(target.suffix + ".new")
         shutil.copy2(source, temp_target)
         os.replace(temp_target, target)
-        self.logger(f"[Updater] ZastÄ…piono plik: {target.relative_to(self.app_root)}")
+        self.logger(f"[Updater] Replaced file: {target.relative_to(self.app_root)}")
 
     def _replace_file_with_backup(self, source: Path, target: Path, backup_root: Path) -> dict:
         if not self._is_safe_path(target):
-            raise UpdateError(f"Nieprawidlowa sciezka docelowa: {target}.")
+            raise UpdateError(f"Invalid target path: {target}.")
         target.parent.mkdir(parents=True, exist_ok=True)
         existed = target.exists()
         backup_path = None
@@ -246,7 +246,7 @@ class UpdateManager:
             raise
         except OSError as exc:
             raise UpdateError(
-                f"Nie mozna podmienic pliku {target}: {exc}. Zamknij aplikacje i sprobuj ponownie."
+                f"Unable to replace file {target}: {exc}. Close the app and try again."
             ) from exc
         return {"target": target, "backup": backup_path, "existed": existed}
 
@@ -285,7 +285,7 @@ class UpdateManager:
             if not path or not sha256:
                 continue
             if not self._is_relative_safe(path):
-                raise UpdateError(f"NieprawidĹ‚owa Ĺ›cieĹĽka w manifeĹ›cie: {path}.")
+                raise UpdateError(f"Invalid path in manifest: {path}.")
             files.append(UpdateFile(path=str(path), sha256=str(sha256), url=item.get("url")))
         return files
 
@@ -306,7 +306,7 @@ class UpdateManager:
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            raise UpdateError(f"Nie udaĹ‚o siÄ™ odczytaÄ‡ manifestu: {exc}") from exc
+            raise UpdateError(f"Failed to read manifest: {exc}") from exc
 
 
 

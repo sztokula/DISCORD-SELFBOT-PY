@@ -40,27 +40,27 @@ class CaptchaSolver:
         provider = self._normalize_provider(provider or self.get_provider())
         api_key = api_key or self.get_api_key(provider)
         if not api_key:
-            return False, "Brak klucza API."
+            return False, "Missing API key."
         if provider == "capsolver":
             return self._capsolver_balance(api_key)
         if provider == "2captcha":
             return self._twocaptcha_balance(api_key)
         if provider == "anticaptcha":
             return self._anticaptcha_balance(api_key)
-        return False, "Nieobsługiwany provider."
+        return False, "Unsupported provider."
 
     def solve_captcha(self, captcha_info: dict, provider: Optional[str] = None, api_key: Optional[str] = None) -> Tuple[bool, str]:
         provider = self._normalize_provider(provider or self.get_provider())
         api_key = api_key or self.get_api_key(provider)
         if not api_key:
-            return False, "Brak klucza API."
+            return False, "Missing API key."
 
         service = (captcha_info.get("service") or "hcaptcha").lower()
         if service in {"hcaptcha", "hcaptcha_enterprise"}:
             return self._solve_hcaptcha(provider, api_key, captcha_info)
         if service in {"funcaptcha", "arkose", "arkoselabs", "arkose-labs"}:
             return self._solve_arkose(provider, api_key, captcha_info)
-        return False, f"Nieobsługiwany typ captcha: {service}"
+        return False, f"Unsupported captcha type: {service}"
 
     def _solve_hcaptcha(self, provider: str, api_key: str, captcha_info: dict) -> Tuple[bool, str]:
         if provider == "capsolver":
@@ -69,7 +69,7 @@ class CaptchaSolver:
             return self._twocaptcha_hcaptcha(api_key, captcha_info)
         if provider == "anticaptcha":
             return self._anticaptcha_hcaptcha(api_key, captcha_info)
-        return False, "Nieobsługiwany provider."
+        return False, "Unsupported provider."
 
     def _solve_arkose(self, provider: str, api_key: str, captcha_info: dict) -> Tuple[bool, str]:
         if provider == "capsolver":
@@ -78,7 +78,7 @@ class CaptchaSolver:
             return self._twocaptcha_arkose(api_key, captcha_info)
         if provider == "anticaptcha":
             return self._anticaptcha_arkose(api_key, captcha_info)
-        return False, "Nieobsługiwany provider."
+        return False, "Unsupported provider."
 
     def _capsolver_balance(self, api_key: str) -> Tuple[bool, str]:
         try:
@@ -90,8 +90,8 @@ class CaptchaSolver:
             data = response.json()
             if data.get("errorId") == 0:
                 balance = data.get("balance", "0")
-                return True, f"Saldo: {balance} USD"
-            return False, data.get("errorDescription", "Nieznany błąd")
+                return True, f"Balance: {balance} USD"
+            return False, data.get("errorDescription", "Unknown error")
         except Exception as exc:
             return False, str(exc)
 
@@ -104,8 +104,8 @@ class CaptchaSolver:
             )
             data = response.json()
             if data.get("status") == 1:
-                return True, f"Saldo: {data.get('request')} USD"
-            return False, data.get("request", "Nieznany błąd")
+                return True, f"Balance: {data.get('request')} USD"
+            return False, data.get("request", "Unknown error")
         except Exception as exc:
             return False, str(exc)
 
@@ -118,8 +118,8 @@ class CaptchaSolver:
             )
             data = response.json()
             if data.get("errorId") == 0:
-                return True, f"Saldo: {data.get('balance', '0')} USD"
-            return False, data.get("errorDescription", "Nieznany błąd")
+                return True, f"Balance: {data.get('balance', '0')} USD"
+            return False, data.get("errorDescription", "Unknown error")
         except Exception as exc:
             return False, str(exc)
 
@@ -177,10 +177,10 @@ class CaptchaSolver:
             )
             create_data = create.json()
             if create_data.get("errorId") != 0:
-                return False, create_data.get("errorDescription", "Nieznany błąd")
+                return False, create_data.get("errorDescription", "Unknown error")
             task_id = create_data.get("taskId")
             if not task_id:
-                return False, "Brak taskId z CapSolver."
+                return False, "Missing taskId from CapSolver."
             return self._capsolver_poll(api_key, task_id)
         except Exception as exc:
             return False, str(exc)
@@ -207,10 +207,10 @@ class CaptchaSolver:
                 )
                 if token:
                     return True, token
-                return False, "Brak tokenu captcha w odpowiedzi."
+                return False, "Missing captcha token in response."
             if data.get("status") == "failed":
                 return False, data.get("errorDescription", "Captcha failed")
-        return False, "Timeout oczekiwania na captcha."
+        return False, "Captcha wait timeout."
 
     def _anticaptcha_solve(self, api_key: str, task: dict) -> Tuple[bool, str]:
         try:
@@ -221,10 +221,10 @@ class CaptchaSolver:
             )
             create_data = create.json()
             if create_data.get("errorId") != 0:
-                return False, create_data.get("errorDescription", "Nieznany błąd")
+                return False, create_data.get("errorDescription", "Unknown error")
             task_id = create_data.get("taskId")
             if not task_id:
-                return False, "Brak taskId z Anti-Captcha."
+                return False, "Missing taskId from Anti-Captcha."
             return self._anticaptcha_poll(api_key, task_id)
         except Exception as exc:
             return False, str(exc)
@@ -249,8 +249,8 @@ class CaptchaSolver:
                 token = solution.get("gRecaptchaResponse") or solution.get("token")
                 if token:
                     return True, token
-                return False, "Brak tokenu captcha w odpowiedzi."
-        return False, "Timeout oczekiwania na captcha."
+                return False, "Missing captcha token in response."
+        return False, "Captcha wait timeout."
 
     def _twocaptcha_hcaptcha(self, api_key: str, captcha_info: dict) -> Tuple[bool, str]:
         params = {
@@ -287,7 +287,7 @@ class CaptchaSolver:
             )
             data = submit.json()
             if data.get("status") != 1:
-                return False, data.get("request", "Nieznany błąd")
+                return False, data.get("request", "Unknown error")
             request_id = data.get("request")
         except Exception as exc:
             return False, str(exc)
@@ -307,5 +307,5 @@ class CaptchaSolver:
             if res_data.get("status") == 1:
                 return True, res_data.get("request", "")
             if res_data.get("request") != "CAPCHA_NOT_READY":
-                return False, res_data.get("request", "Błąd 2Captcha")
-        return False, "Timeout oczekiwania na captcha."
+                return False, res_data.get("request", "2Captcha error")
+        return False, "Captcha wait timeout."

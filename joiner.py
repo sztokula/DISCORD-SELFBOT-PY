@@ -41,16 +41,16 @@ class DiscordJoiner:
         try:
             fresh_token = self.db.get_account_token(account_id)
         except Exception as e:
-            self.log(f"[Auth] Nie udało się odświeżyć tokenu dla konta {account_id}: {e}")
+            self.log(f"[Auth] Failed to refresh token for account {account_id}: {e}")
             return None
         if fresh_token and fresh_token != current_token:
-            self.log(f"[Auth] Odświeżono token dla konta {account_id}.")
+            self.log(f"[Auth] Refreshed token for account {account_id}.")
             return fresh_token
         return None
 
     def _handle_unauthorized(self, client, account_id, current_token, refreshed):
         if refreshed:
-            self.log(f"[Joiner] Token dla konta {account_id} nadal niepoprawny. Dezaktywuję konto.")
+            self.log(f"[Joiner] Token for account {account_id} is still invalid. Deactivating account.")
             if account_id is not None:
                 self.db.update_account_status(account_id, "Banned/Dead")
                 self.db.remove_account(account_id)
@@ -59,15 +59,15 @@ class DiscordJoiner:
         if new_token:
             client.headers["Authorization"] = new_token
             return new_token, True
-        self.log(f"[Joiner] Brak nowego tokenu dla konta {account_id}. Dezaktywuję konto.")
+        self.log(f"[Joiner] No new token for account {account_id}. Deactivating account.")
         if account_id is not None:
             self.db.update_account_status(account_id, "Banned/Dead")
             self.db.remove_account(account_id)
         return None, True
 
     def join_server(self, account_id, token, invite_code, proxy=None):
-        """invite_code: tylko końcówka linku, np. 'fajny-serwer' z discord.gg/fajny-serwer"""
-        # Czyścimy kod zaproszenia na wypadek gdyby ktoś wkleił cały link
+        """invite_code: only the invite slug, e.g. 'cool-server' from discord.gg/cool-server"""
+        # Strip invite code in case a full link is pasted.
         invite_code = invite_code.split("/")[-1]
         
         url = f"https://discord.com/api/v9/invites/{invite_code}"
@@ -95,7 +95,7 @@ class DiscordJoiner:
                             continue
                         return False, "Unauthorized (token)"
                     if response.status_code == 200:
-                        return True, "Sukces"
+                        return True, "Success"
                     if response.status_code in {400, 403}:
                         captcha_info = self._extract_captcha(response)
                         if captcha_info and self.captcha_solver:
@@ -108,20 +108,20 @@ class DiscordJoiner:
                                 retry_resp = client.post(url, json=payload)
                                 self._record_request(time.monotonic() - start, retry_resp)
                                 if retry_resp.status_code == 200:
-                                    return True, "Sukces (captcha)"
-                                return False, f"Błąd po captcha: {retry_resp.status_code}"
+                                    return True, "Success (captcha)"
+                                return False, f"Post-captcha error: {retry_resp.status_code}"
                             return False, f"Captcha error: {token_or_err}"
-                        return False, "Wymagana weryfikacja (Captcha/Telefon)"
+                        return False, "Verification required (Captcha/Phone)"
                     if response.status_code == 429:
                         retry_after = self._get_retry_after(response)
                         wait_time = retry_after * (backoff_factor ** attempt)
                         self._sleep_with_stop(wait_time)
                         continue
-                    return False, f"Błąd {response.status_code}"
+                    return False, f"Error {response.status_code}"
         except Exception as e:
             return False, str(e)
 
-        return False, "Rate Limit (po ponownych próbach)"
+        return False, "Rate Limit (after retries)"
 
     def run_mass_join(self, invite_codes, delay_min, delay_max, on_complete=None):
         self.is_running = True
@@ -130,19 +130,19 @@ class DiscordJoiner:
         joined_any = False
         
         if not accounts:
-            self.log("[Joiner] Brak aktywnych kont do operacji.")
+            self.log("[Joiner] No active accounts available.")
             if on_complete:
                 on_complete(False)
             return
 
         if not invite_codes:
-            self.log("[Joiner] Brak poprawnych zaproszeń.")
+            self.log("[Joiner] No valid invites.")
             self.is_running = False
             if on_complete:
                 on_complete(False)
             return
 
-        self.log(f"[Joiner] Rozpoczynam dołączanie {len(accounts)} kont do {len(invite_codes)} zaproszeń (losowo na konto).")
+        self.log(f"[Joiner] Starting to join {len(accounts)} accounts to {len(invite_codes)} invites (random per account).")
 
         did_join_attempt = False
         for acc in accounts:
@@ -150,7 +150,7 @@ class DiscordJoiner:
             
             acc_id, _, token, proxy, _, _, _, _, join_limit, join_today, _ = acc
             if join_today >= join_limit:
-                self.log(f"[Joiner] Konto {acc_id}: dzienny limit joinów osiągnięty ({join_today}/{join_limit}).")
+                self.log(f"[Joiner] Account {acc_id}: daily join limit reached ({join_today}/{join_limit}).")
                 continue
             invite_code = random.choice(invite_codes)
             success, msg = self.join_server(acc_id, token, invite_code, proxy)
@@ -158,19 +158,19 @@ class DiscordJoiner:
             if success:
                 self.db.increment_join_counter(acc_id)
                 joined_any = True
-                self.log(f"[Joiner] Konto {acc_id}: DOŁĄCZONO ({invite_code}).")
+                self.log(f"[Joiner] Account {acc_id}: JOINED ({invite_code}).")
             else:
-                self.log(f"[Joiner] Konto {acc_id}: BŁĄD ({msg}) [{invite_code}]")
+                self.log(f"[Joiner] Account {acc_id}: ERROR ({msg}) [{invite_code}]")
             
             did_join_attempt = True
-            # BARDZO WAŻNE: Duży odstęp czasu przy dołączaniu
+            # IMPORTANT: add a larger delay between joins.
             wait = random.randint(delay_min, delay_max)
-            self.log(f"[Joiner] Oczekiwanie {wait}s przed następnym kontem...")
+            self.log(f"[Joiner] Waiting {wait}s before the next account...")
             self._sleep_with_stop(wait)
 
         if self.is_running and not did_join_attempt:
-            self.log("[Joiner] Wszystkie konta mają dzienny limit joinów.")
-        self.log("[Joiner] Proces masowego dołączania zakończony.")
+            self.log("[Joiner] All accounts reached the daily join limit.")
+        self.log("[Joiner] Mass join process finished.")
         self.is_running = False
         if on_complete:
             on_complete(joined_any)

@@ -1,0 +1,5 @@
+[2026-01-20 15:37:25] Error: Joining failed or was cancelled.
+[2026-01-20 15:37:26] Error: Joining failed or was cancelled.
+[2026-01-20 15:40:10] [Captcha] Error (capsolver) - Missing API key.
+[2026-01-20 15:40:20] [Captcha] Error (2captcha) - Missing API key.
+[2026-01-20 15:40:24] Error: Version endpoint is empty. Fill it in settings.

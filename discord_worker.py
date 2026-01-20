@@ -21,7 +21,7 @@ class DiscordWorker:
         self.metrics.record_request(duration, rate_limited=rate_limited)
 
     def parse_spintax(self, text):
-        """Zamienia {opcja1|opcja2} na losową opcję."""
+        """Replace {option1|option2} with a random option."""
         while True:
             match = re.search(r"\{([^{}]*)\}", text)
             if not match:
@@ -70,7 +70,7 @@ class DiscordWorker:
         return self.parse_spintax(message)
 
     def send_friend_request(self, client, user_id):
-        """Opcjonalna funkcja wysyłania zaproszenia do znajomych."""
+        """Optional helper that sends a friend request."""
         url = f"https://discord.com/api/v9/users/{user_id}/relationships"
         try:
             start = time.monotonic()
@@ -117,16 +117,16 @@ class DiscordWorker:
         try:
             fresh_token = self.db.get_account_token(account_id)
         except Exception as e:
-            self.log(f"[Auth] Nie udało się odświeżyć tokenu dla konta {account_id}: {e}")
+            self.log(f"[Auth] Failed to refresh token for account {account_id}: {e}")
             return None
         if fresh_token and fresh_token != current_token:
-            self.log(f"[Auth] Odświeżono token dla konta {account_id}.")
+            self.log(f"[Auth] Refreshed token for account {account_id}.")
             return fresh_token
         return None
 
     def _handle_unauthorized(self, client, account_id, current_token, refreshed):
         if refreshed:
-            self.log(f"[Auth] Token dla konta {account_id} nadal niepoprawny. Dezaktywuję konto.")
+            self.log(f"[Auth] Token for account {account_id} is still invalid. Deactivating account.")
             if account_id is not None:
                 self.db.update_account_status(account_id, "Banned/Dead")
                 self.db.remove_account(account_id)
@@ -135,7 +135,7 @@ class DiscordWorker:
         if new_token:
             client.headers["Authorization"] = new_token
             return new_token, True
-        self.log(f"[Auth] Brak nowego tokenu dla konta {account_id}. Dezaktywuję konto.")
+        self.log(f"[Auth] No new token for account {account_id}. Deactivating account.")
         if account_id is not None:
             self.db.update_account_status(account_id, "Banned/Dead")
             self.db.remove_account(account_id)
@@ -152,16 +152,16 @@ class DiscordWorker:
         with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
             try:
                 refreshed = False
-                # Opcjonalnie: Zaproszenie do znajomych
+                # Optional: send friend request.
                 if add_friend:
                     self.send_friend_request(client, user_id)
                     if friend_delay_max > 0:
                         delay = random.randint(friend_delay_min, friend_delay_max)
                         if delay > 0:
-                            self.log(f"[Friend Request] Oczekiwanie {delay}s przed DM do {user_id}.")
+                            self.log(f"[Friend Request] Waiting {delay}s before DM to {user_id}.")
                             self._sleep_with_stop(delay)
 
-                # Otwarcie kanału DM
+                # Open DM channel.
                 url_channel = "https://discord.com/api/v9/users/@me/channels"
                 channel_id = None
                 for attempt in range(self.max_retries + 1):
@@ -182,11 +182,11 @@ class DiscordWorker:
                     return False, f"Channel Error: {response.status_code}"
 
                 if not channel_id:
-                    return False, "Rate Limit (kanał DM)"
+                    return False, "Rate Limit (DM channel)"
 
                 msg_url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
 
-                # Losowanie wiadomości (szablony + spintax)
+                # Message randomization (templates + spintax).
                 final_msg = self.render_message(message_template)
 
                 for attempt in range(self.max_retries + 1):
@@ -205,7 +205,7 @@ class DiscordWorker:
                         continue
                     return False, f"Code: {msg_resp.status_code}"
 
-                return False, "Rate Limit (wiadomość)"
+                return False, "Rate Limit (message)"
             except Exception as e:
                 return False, str(e)
 
@@ -221,7 +221,7 @@ class DiscordWorker:
         target_min_interval_seconds=0,
     ):
         self.is_running = True
-        self.log("[Mission] Startujemy...")
+        self.log("[Mission] Starting...")
         self.db.reset_daily_counters()
         
         while self.is_running:
@@ -238,14 +238,14 @@ class DiscordWorker:
                 if account_min_interval_seconds > 0:
                     remaining = self.db.get_account_dm_cooldown(acc_id, account_min_interval_seconds)
                     if remaining > 0:
-                        self.log(f"[Mission] Konto {acc_id}: czekam {remaining:.1f}s (cooldown).")
+                        self.log(f"[Mission] Account {acc_id}: waiting {remaining:.1f}s (cooldown).")
                         self._sleep_with_stop(remaining)
                         if not self.is_running:
                             break
 
                 target = self.db.get_next_target("discord", min_target_interval_seconds=target_min_interval_seconds)
                 if not target:
-                    self.log("[System] Brak celów w bazie.")
+                    self.log("[System] No targets in database.")
                     self.is_running = False
                     return
 
@@ -267,15 +267,15 @@ class DiscordWorker:
                     self.db.update_target_status(t_id, "Sent")
                     self.db.increment_sent_counter(acc_id)
                     self.db.record_last_dm(acc_id, u_id)
-                    self.log(f"[OK] DM wysłany do {u_id}")
+                    self.log(f"[OK] DM sent to {u_id}")
                 else:
                     self.db.update_target_status(t_id, "Failed", msg)
-                    self.log(f"[!] Błąd {u_id}: {msg}")
+                    self.log(f"[!] Error {u_id}: {msg}")
 
                 self._sleep_with_stop(random.randint(delay_min, delay_max))
 
             if self.is_running and not did_send_attempt:
-                self.log("[Mission] Wszystkie konta mają dzienny limit. Uśpienie przed kolejną próbą.")
+                self.log("[Mission] All accounts reached the daily limit. Sleeping before next attempt.")
                 self._sleep_with_stop(5)
 
     def stop(self):
