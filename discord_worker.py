@@ -2,6 +2,7 @@ import httpx
 import time
 import random
 import re
+from collections import deque
 from datetime import datetime, timedelta
 
 class DiscordWorker:
@@ -16,6 +17,7 @@ class DiscordWorker:
         self.default_tags = ["#promo", "#info", "#discord", "#community", "#support"]
         self.default_emojis = ["🔥", "✨", "✅", "🚀", "🎉", "💬", "🧩", "🌟"]
         self._last_template = None
+        self._recent_templates = deque(maxlen=3)
         self.captcha_retry_base_seconds = 60
         self.captcha_retry_max_seconds = 900
         self.max_captcha_retries = 3
@@ -82,12 +84,16 @@ class DiscordWorker:
         if len(templates) == 1:
             chosen = templates[0]
             self._last_template = chosen
+            self._recent_templates.clear()
+            self._recent_templates.append(chosen)
             return chosen
-        candidates = [tpl for tpl in templates if tpl != self._last_template]
+        recent_set = set(self._recent_templates)
+        candidates = [tpl for tpl in templates if tpl not in recent_set]
         if not candidates:
             candidates = templates
         chosen = random.choice(candidates)
         self._last_template = chosen
+        self._recent_templates.append(chosen)
         return chosen
 
     def send_friend_request(self, client, user_id):
@@ -375,6 +381,7 @@ class DiscordWorker:
     ):
         self.is_running = True
         self._last_template = None
+        self._recent_templates.clear()
         self.log("[Mission] Starting...")
         self.db.reset_daily_counters()
         
