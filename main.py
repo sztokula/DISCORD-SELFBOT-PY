@@ -123,8 +123,66 @@ class MassDMApp(ctk.CTk):
         self.health_requests_label = ctk.CTkLabel(self.health_frame, text="Requests: --", anchor="w")
         self.health_requests_label.grid(row=1, column=3, padx=10, pady=5, sticky="w")
 
+        self.workflow_frame = ctk.CTkFrame(self.main_container)
+        self.workflow_frame.pack(fill="x", pady=(0, 10))
+        for col in range(2):
+            self.workflow_frame.grid_columnconfigure(col, weight=1)
+        ctk.CTkLabel(self.workflow_frame, text="Start Steps", font=ctk.CTkFont(size=16, weight="bold")).grid(
+            row=0, column=0, columnspan=2, pady=10
+        )
+        self.step_accounts_label = ctk.CTkLabel(self.workflow_frame, text="1. Konta: --", anchor="w")
+        self.step_accounts_label.grid(row=1, column=0, padx=10, pady=2, sticky="w")
+        self.step_proxies_label = ctk.CTkLabel(self.workflow_frame, text="2. Proxy: --", anchor="w")
+        self.step_proxies_label.grid(row=2, column=0, padx=10, pady=2, sticky="w")
+        self.step_invites_label = ctk.CTkLabel(self.workflow_frame, text="3. Serwery: --", anchor="w")
+        self.step_invites_label.grid(row=3, column=0, padx=10, pady=2, sticky="w")
+        self.step_templates_label = ctk.CTkLabel(self.workflow_frame, text="4. Templates: --", anchor="w")
+        self.step_templates_label.grid(row=4, column=0, padx=10, pady=2, sticky="w")
+        self.step_settings_label = ctk.CTkLabel(self.workflow_frame, text="5. Ustawienia: --", anchor="w")
+        self.step_settings_label.grid(row=5, column=0, padx=10, pady=2, sticky="w")
+
+        self.workflow_refresh_btn = ctk.CTkButton(self.workflow_frame, text="Refresh", command=self.refresh_workflow_status)
+        self.workflow_refresh_btn.grid(row=1, column=1, padx=10, pady=5, sticky="e")
+        self.workflow_next_btn = ctk.CTkButton(self.workflow_frame, text="Dalej", command=self.advance_workflow)
+        self.workflow_next_btn.grid(row=2, column=1, padx=10, pady=5, sticky="e")
+
+        self.workflow_actions_frame = ctk.CTkFrame(self.main_container)
+        self.workflow_actions_frame.pack(fill="x", pady=(0, 10))
+        for col in range(3):
+            self.workflow_actions_frame.grid_columnconfigure(col, weight=1)
+        ctk.CTkLabel(self.workflow_actions_frame, text="Actions", font=ctk.CTkFont(size=16, weight="bold")).grid(
+            row=0, column=0, columnspan=3, pady=10
+        )
+        self.join_action_btn = ctk.CTkButton(
+            self.workflow_actions_frame,
+            text="DOLACZ",
+            fg_color="#f39c12",
+            hover_color="#d35400",
+            command=self._handle_join_action,
+        )
+        self.join_action_btn.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.scrape_action_btn = ctk.CTkButton(
+            self.workflow_actions_frame,
+            text="SCRAP MEMBERS",
+            fg_color="#16a085",
+            command=self._handle_scrape_action,
+        )
+        self.scrape_action_btn.grid(row=1, column=1, padx=10, pady=5, sticky="w")
+        self.dm_action_btn = ctk.CTkButton(
+            self.workflow_actions_frame,
+            text="Wyslij DM",
+            fg_color="#2ecc71",
+            command=self._handle_dm_action,
+        )
+        self.dm_action_btn.grid(row=1, column=2, padx=10, pady=5, sticky="w")
+        self.scrape_action_btn.grid_remove()
+        self.dm_action_btn.grid_remove()
+        self._set_workflow_stage("setup")
+
         # 1. SEKCJA WIADOMOĹšCI (przeniesiona do ustawien)
         self.friend_request_var = ctk.BooleanVar(value=False)
+        self.settings_loaded = False
+        self.workflow_stage = "setup"
 
         # 2. SEKCJA LOGĂ“W
         self.log_frame = ctk.CTkFrame(self.main_container)
@@ -185,6 +243,7 @@ class MassDMApp(ctk.CTk):
         self.control_bar.grid(row=1, column=1, sticky="ew", padx=20, pady=(0, 20))
         self.start_btn = ctk.CTkButton(self.control_bar, text="START MISSION", fg_color="#2ecc71", command=self.start_mission)
         self.start_btn.pack(side="left", padx=50, pady=20)
+        self.start_btn.pack_forget()
         self.stop_btn = ctk.CTkButton(self.control_bar, text="STOP ALL", fg_color="#e74c3c", command=self.stop_all)
         self.stop_btn.pack(side="right", padx=50, pady=20)
 
@@ -251,6 +310,109 @@ class MassDMApp(ctk.CTk):
             self.log_error(f"{label} musi byÄ‡ >= {min_value}.")
             return None
         return value
+
+    def _count_templates(self):
+        if not hasattr(self, "msg_input"):
+            return 0
+        raw = self.msg_input.get("1.0", "end").strip()
+        if not raw:
+            return 0
+        templates = [tpl.strip() for tpl in re.split(r"\n-{3,}\n", raw) if tpl.strip()]
+        return len(templates)
+
+    def _count_invites(self):
+        if not hasattr(self, "invite_input"):
+            return 0
+        raw_text = self.invite_input.get("1.0", "end")
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        count = 0
+        for line in lines:
+            if self.normalize_invite(line):
+                count += 1
+        return count
+
+    def refresh_workflow_status(self):
+        accounts = self.db.get_accounts_overview()
+        account_count = len(accounts)
+        proxy_count = sum(1 for acc in accounts if acc[2])
+        invite_count = self._count_invites()
+        template_count = self._count_templates()
+        settings_status = "tak" if self.settings_loaded else "nie"
+
+        self.step_accounts_label.configure(text=f"1. Konta: {account_count}")
+        self.step_proxies_label.configure(text=f"2. Proxy: {proxy_count}")
+        self.step_invites_label.configure(text=f"3. Serwery: {invite_count}")
+        self.step_templates_label.configure(text=f"4. Templates: {template_count}")
+        self.step_settings_label.configure(text=f"5. Ustawienia: {settings_status}")
+
+        can_next = account_count > 0 and invite_count > 0 and template_count > 0 and self.settings_loaded
+        self.workflow_next_btn.configure(state="normal" if can_next else "disabled")
+
+    def advance_workflow(self):
+        self._set_workflow_stage("join")
+
+    def _set_workflow_stage(self, stage):
+        self.workflow_stage = stage
+        joiner_enabled = self.module_vars["joiner"].get()
+        scraper_enabled = self.module_vars["scraper"].get()
+        dm_enabled = self.module_vars["dm"].get()
+        if stage == "setup":
+            self.join_action_btn.configure(state="disabled")
+            self.scrape_action_btn.grid_remove()
+            self.dm_action_btn.grid_remove()
+            return
+        if stage == "join":
+            self.join_action_btn.configure(state="normal" if joiner_enabled else "disabled")
+            self.scrape_action_btn.grid_remove()
+            self.dm_action_btn.grid_remove()
+            return
+        if stage == "scrape":
+            self.join_action_btn.configure(state="disabled")
+            self.scrape_action_btn.grid()
+            self.scrape_action_btn.configure(state="normal" if scraper_enabled else "disabled")
+            self.dm_action_btn.grid_remove()
+            return
+        if stage == "dm":
+            self.join_action_btn.configure(state="disabled")
+            self.scrape_action_btn.configure(state="disabled")
+            self.dm_action_btn.grid()
+            self.dm_action_btn.configure(state="normal" if dm_enabled else "disabled")
+
+    def _handle_join_action(self):
+        if not hasattr(self, "invite_input"):
+            self.log_error("OtwĂłrz ustawienia i wprowadĹş zaproszenia do serwerĂłw.")
+            return
+        self.join_action_btn.configure(state="disabled")
+        started = self.start_joining(on_complete=self._on_join_complete)
+        if not started:
+            self.join_action_btn.configure(state="normal")
+
+    def _on_join_complete(self, success):
+        def _update():
+            if success:
+                self._set_workflow_stage("scrape")
+            else:
+                self.log_error("DoĹ‚Ä…czanie nie powiodĹ‚o siÄ™ lub przerwane.")
+                self.join_action_btn.configure(state="normal")
+        self.after(0, _update)
+
+    def _handle_scrape_action(self):
+        self.scrape_action_btn.configure(state="disabled")
+        started = self.start_guild_scraping(on_complete=self._on_scrape_complete)
+        if not started:
+            self.scrape_action_btn.configure(state="normal")
+
+    def _on_scrape_complete(self, success):
+        def _update():
+            if success:
+                self._set_workflow_stage("dm")
+            else:
+                self.log_error("Scrapowanie nie powiodĹ‚o siÄ™ lub przerwane.")
+                self.scrape_action_btn.configure(state="normal")
+        self.after(0, _update)
+
+    def _handle_dm_action(self):
+        self.start_mission()
 
     def _normalize_version(self, version_value):
         if not version_value:
@@ -784,14 +946,14 @@ class MassDMApp(ctk.CTk):
             self.log_error(f"Niepoprawne zaproszenia (pomijam): {', '.join(invalid)}")
         return normalized
 
-    def start_joining(self):
+    def start_joining(self, on_complete=None):
         if not self.module_vars["joiner"].get():
             self.log_error("ModuĹ‚ Joiner jest wyĹ‚Ä…czony.")
-            return
+            return False
         invites = self._get_invite_list()
         if not invites:
             self.log_error("Brak poprawnych zaproszeĹ„.")
-            return
+            return False
         join_delay = self._parse_delay_range(
             self.join_delay_min_input,
             self.join_delay_max_input,
@@ -800,49 +962,61 @@ class MassDMApp(ctk.CTk):
             min_value=0,
         )
         if not join_delay:
-            return
+            return False
         join_delay_min, join_delay_max = join_delay
         self.db.set_setting("join_delay_min", str(join_delay_min))
         self.db.set_setting("join_delay_max", str(join_delay_max))
-        thread = threading.Thread(target=self.joiner.run_mass_join, args=(invites, join_delay_min, join_delay_max))
+        thread = threading.Thread(
+            target=self.joiner.run_mass_join,
+            args=(invites, join_delay_min, join_delay_max, on_complete),
+        )
         thread.daemon = True
         thread.start()
+        return True
 
-    def start_scraping(self):
+    def start_scraping(self, on_complete=None):
         if not self.module_vars["scraper"].get():
             self.log_error("Moduł Scraper jest wyłączony.")
-            return
+            return False
         token = self.token_input.get().strip()
         channel_id = self.scrape_channel_input.get().strip()
         range_value = self.scrape_range_input.get().strip()
         if not self.validate_token_format(token):
-            return
+            return False
         if not self.is_valid_channel_id(channel_id):
-            return
+            return False
         limit = self._get_scrape_limit(range_value, 500)
         if limit is None:
-            return
-        thread = threading.Thread(target=self.scraper.scrape_history, args=(token, channel_id, limit))
+            return False
+        thread = threading.Thread(
+            target=self.scraper.scrape_history,
+            args=(token, channel_id, limit, on_complete),
+        )
         thread.daemon = True
         thread.start()
+        return True
 
-    def start_guild_scraping(self):
+    def start_guild_scraping(self, on_complete=None):
         if not self.module_vars["scraper"].get():
             self.log_error("Moduł Scraper jest wyłączony.")
-            return
+            return False
         token = self.token_input.get().strip()
         guild_id = self.scrape_guild_input.get().strip()
         range_value = self.scrape_range_input.get().strip()
         if not self.validate_token_format(token):
-            return
+            return False
         if not self.is_valid_guild_id(guild_id):
-            return
+            return False
         limit = self._get_scrape_limit(range_value, 1000)
         if limit is None:
-            return
-        thread = threading.Thread(target=self.scraper.scrape_guild_members, args=(token, guild_id, limit))
+            return False
+        thread = threading.Thread(
+            target=self.scraper.scrape_guild_members,
+            args=(token, guild_id, limit, on_complete),
+        )
         thread.daemon = True
         thread.start()
+        return True
 
     def start_status_update(self):
         if not self.module_vars["status"].get():
@@ -974,6 +1148,7 @@ class MassDMApp(ctk.CTk):
         self.acc_overview_box.delete("1.0", "end")
         if not accounts:
             self.acc_overview_box.insert("end", "Brak kont w bazie.\n")
+            self.refresh_workflow_status()
             return
         self.acc_overview_box.insert("end", "ID | Status | DM sent/limit | Join sent/limit | Proxy\n")
         self.acc_overview_box.insert("end", "-" * 70 + "\n")
@@ -981,6 +1156,7 @@ class MassDMApp(ctk.CTk):
             proxy_value = proxy if proxy else "-"
             line = f"{acc_id} | {status} | {sent_today}/{dm_limit} | {join_today}/{join_limit} | {proxy_value}\n"
             self.acc_overview_box.insert("end", line)
+        self.refresh_workflow_status()
 
     def reset_account_counters(self):
         self.db.reset_account_counters()
@@ -1144,6 +1320,8 @@ class MassDMApp(ctk.CTk):
             self.captcha_provider.configure(state="normal" if captcha_enabled else "disabled")
         if hasattr(self, "captcha_key_input"):
             self.captcha_key_input.configure(state="normal" if captcha_enabled else "disabled")
+        if hasattr(self, "workflow_stage"):
+            self._set_workflow_stage(self.workflow_stage)
 
     def open_settings_window(self):
         if self.settings_window and self.settings_window.winfo_exists():
@@ -1157,12 +1335,15 @@ class MassDMApp(ctk.CTk):
         self.settings_container = ctk.CTkScrollableFrame(self.settings_window, fg_color="transparent")
         self.settings_container.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
         self._build_settings_sections(self.settings_container)
+        self.settings_loaded = True
+        self.refresh_workflow_status()
         self.settings_window.protocol("WM_DELETE_WINDOW", self.close_settings_window)
 
     def close_settings_window(self):
         if self.settings_window and self.settings_window.winfo_exists():
             self.save_delay_settings()
             self.settings_window.destroy()
+            self.refresh_workflow_status()
         self.settings_window = None
 
     def save_delay_settings(self):
@@ -1513,6 +1694,7 @@ class MassDMApp(ctk.CTk):
         self.refresh_targets_overview()
         self.refresh_banlist_overview()
         self.apply_module_states()
+        self.refresh_workflow_status()
 
     def on_captcha_provider_change(self, _value=None):
         self._refresh_captcha_key()

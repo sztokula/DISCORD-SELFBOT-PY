@@ -94,9 +94,10 @@ class DiscordScraper:
             return None
         return data.get("id")
 
-    def scrape_history(self, token, channel_id, limit=1000):
+    def scrape_history(self, token, channel_id, limit=1000, on_complete=None):
         """Pobiera ID użytkowników, którzy pisali na danym kanale."""
         self.is_scraping = True
+        added_any = False
         self.log(f"[Scraper] Rozpoczynanie pobierania z kanału {channel_id}...")
         
         headers = {"Authorization": token}
@@ -148,19 +149,23 @@ class DiscordScraper:
             # Zapis do bazy
             if unique_ids:
                 self.db.add_targets(list(unique_ids), "discord")
+                added_any = True
                 self.log(f"[Scraper] Sukces! Dodano {len(unique_ids)} nowych celów do bazy.")
             
         except Exception as e:
             self.log(f"[Scraper] Krytyczny błąd: {str(e)}")
         
         self.is_scraping = False
+        if on_complete:
+            on_complete(added_any)
 
     def stop(self):
         self.is_scraping = False
 
-    def scrape_guild_members(self, token, guild_id, limit=1000):
+    def scrape_guild_members(self, token, guild_id, limit=1000, on_complete=None):
         """Pobiera listę członków serwera przez /guilds/{id}/members."""
         self.is_scraping = True
+        added_any = False
         self.log(f"[Scraper] Rozpoczynanie pobierania member listy z guild {guild_id}...")
 
         headers = {"Authorization": token}
@@ -228,8 +233,11 @@ class DiscordScraper:
 
             if unique_ids:
                 self.db.add_targets(list(unique_ids), "discord")
+                added_any = True
                 self.log(f"[Scraper] Sukces! Dodano {len(unique_ids)} nowych celów do bazy.")
         except Exception as e:
             self.log(f"[Scraper] Krytyczny błąd: {str(e)}")
 
         self.is_scraping = False
+        if on_complete:
+            on_complete(added_any)

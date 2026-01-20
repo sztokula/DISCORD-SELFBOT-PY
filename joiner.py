@@ -123,18 +123,23 @@ class DiscordJoiner:
 
         return False, "Rate Limit (po ponownych próbach)"
 
-    def run_mass_join(self, invite_codes, delay_min, delay_max):
+    def run_mass_join(self, invite_codes, delay_min, delay_max, on_complete=None):
         self.is_running = True
         self.db.reset_daily_counters()
         accounts = self.db.get_active_accounts("discord")
+        joined_any = False
         
         if not accounts:
             self.log("[Joiner] Brak aktywnych kont do operacji.")
+            if on_complete:
+                on_complete(False)
             return
 
         if not invite_codes:
             self.log("[Joiner] Brak poprawnych zaproszeń.")
             self.is_running = False
+            if on_complete:
+                on_complete(False)
             return
 
         self.log(f"[Joiner] Rozpoczynam dołączanie {len(accounts)} kont do {len(invite_codes)} zaproszeń (losowo na konto).")
@@ -152,6 +157,7 @@ class DiscordJoiner:
             
             if success:
                 self.db.increment_join_counter(acc_id)
+                joined_any = True
                 self.log(f"[Joiner] Konto {acc_id}: DOŁĄCZONO ({invite_code}).")
             else:
                 self.log(f"[Joiner] Konto {acc_id}: BŁĄD ({msg}) [{invite_code}]")
@@ -166,6 +172,8 @@ class DiscordJoiner:
             self.log("[Joiner] Wszystkie konta mają dzienny limit joinów.")
         self.log("[Joiner] Proces masowego dołączania zakończony.")
         self.is_running = False
+        if on_complete:
+            on_complete(joined_any)
 
     def stop(self):
         self.is_running = False
