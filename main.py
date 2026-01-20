@@ -75,6 +75,8 @@ class MassDMApp(ctk.CTk):
         self._settings_scroll_fix_bound = False
         self._settings_scrollbar_original = None
         self._settings_scrollbar_widget = None
+        self._template_editing = False
+        self._template_max_chars = 2000
         self.version_status_var = ctk.StringVar(value="Last check: --")
         self.update_status_var = ctk.StringVar(value="Update: --")
         self.update_info = None
@@ -314,35 +316,104 @@ class MassDMApp(ctk.CTk):
         return min_val, max_val
 
     def _count_templates(self):
-        raw = self._get_message_templates_raw()
-        if not raw:
-            return 0
-        templates = [tpl.strip() for tpl in re.split(r"\n-{3,}\n", raw) if tpl.strip()]
-        return len(templates)
+        templates = self._get_message_templates()
+        return sum(1 for template in templates if template.strip())
 
-    def _get_message_templates_raw(self):
-        if hasattr(self, "msg_input") and self.msg_input.winfo_exists():
-            return self.msg_input.get("1.0", "end").strip()
-        return self.db.get_setting("message_templates", "").strip()
+    def _deserialize_templates(self, raw):
+        if not raw:
+            return [""] * 10
+        raw_value = str(raw).strip()
+        if not raw_value:
+            return [""] * 10
+        templates = None
+        try:
+            parsed = json.loads(raw_value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed = None
+        if isinstance(parsed, list):
+            templates = ["" if item is None else str(item) for item in parsed]
+        else:
+            templates = re.split(r"\n-{3,}\n", raw_value)
+        templates = templates or []
+        if len(templates) < 10:
+            templates.extend([""] * (10 - len(templates)))
+        return templates[:10]
+
+    def _get_message_templates(self):
+        if hasattr(self, "template_boxes") and self.template_boxes:
+            if self.template_boxes[0].winfo_exists():
+                templates = []
+                for box in self.template_boxes:
+                    templates.append(box.get("1.0", "end-1c"))
+                return templates
+        stored = self.db.get_setting("message_templates", "")
+        return self._deserialize_templates(stored)
 
     def save_message_templates(self):
-        raw = self._get_message_templates_raw()
-        if not raw:
+        templates = self._get_message_templates()
+        if not any(template.strip() for template in templates):
             self.db.set_setting("message_templates", None)
             self.add_log("[Templates] Cleared message templates.")
             self.refresh_workflow_status()
             return
-        self.db.set_setting("message_templates", raw)
+        payload = json.dumps(templates, ensure_ascii=True)
+        self.db.set_setting("message_templates", payload)
         self.add_log("[Templates] Saved message templates.")
         self.refresh_workflow_status()
 
     def _load_message_templates(self):
-        if not hasattr(self, "msg_input"):
+        if not hasattr(self, "template_boxes"):
             return
-        stored = self.db.get_setting("message_templates", "")
-        self.msg_input.delete("1.0", "end")
-        if stored:
-            self.msg_input.insert("1.0", stored)
+        templates = self._deserialize_templates(self.db.get_setting("message_templates", ""))
+        self._template_editing = True
+        for box, template in zip(self.template_boxes, templates):
+            box.delete("1.0", "end")
+            if template:
+                box.insert("1.0", template)
+            box.edit_modified(False)
+        self._template_editing = False
+        self._refresh_template_counters()
+
+    def _refresh_template_counters(self):
+        if not hasattr(self, "template_boxes"):
+            return
+        for index, box in enumerate(self.template_boxes):
+            if not box.winfo_exists():
+                continue
+            text = box.get("1.0", "end-1c")
+            self._update_template_counter(index, len(text))
+
+    def _update_template_counter(self, index, length):
+        if not hasattr(self, "template_count_labels"):
+            return
+        if index >= len(self.template_count_labels):
+            return
+        label = self.template_count_labels[index]
+        if not label.winfo_exists():
+            return
+        limit = self._template_max_chars
+        label.configure(text=f"Chars: {length}/{limit}")
+
+    def _on_template_modified(self, index, box):
+        if self._template_editing:
+            box.edit_modified(False)
+            return
+        self._template_editing = True
+        try:
+            text = box.get("1.0", "end-1c")
+            limit = self._template_max_chars
+            if len(text) > limit:
+                trimmed = text[:limit]
+                box.delete("1.0", "end")
+                box.insert("1.0", trimmed)
+                text = trimmed
+            self._update_template_counter(index, len(text))
+        finally:
+            box.edit_modified(False)
+            self._template_editing = False
+
+    def _on_template_tab_changed(self):
+        self.save_message_templates()
 
     def _count_invites(self):
         return len(self._get_saved_invites())
@@ -1154,11 +1225,7 @@ class MassDMApp(ctk.CTk):
         if not self.module_vars["dm"].get():
             self.log_error("DM module is disabled.")
             return
-        raw = self._get_message_templates_raw()
-        if not raw:
-            self.log_error("Empty message.")
-            return
-        templates = [tpl.strip() for tpl in re.split(r"\n-{3,}\n", raw) if tpl.strip()]
+        templates = [tpl for tpl in self._get_message_templates() if tpl.strip()]
         if not templates:
             self.log_error("No valid message templates.")
             return
@@ -1649,12 +1716,23 @@ class MassDMApp(ctk.CTk):
         ctk.CTkLabel(self.msg_frame, text="Message Templates", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=5)
         ctk.CTkLabel(
             self.msg_frame,
-            text="Separate templates with line: --- | Tokens: [[tag]], [[emoji]], [[num]], [[num:1-99]] | Spintax: {a|b}",
+            text="One tab = one template. Tokens: [[tag]], [[emoji]], [[num]], [[num:1-99]] | Spintax: {a|b}",
             font=ctk.CTkFont(size=12),
             text_color="#b0b0b0",
         ).pack(pady=(0, 5))
-        self.msg_input = ctk.CTkTextbox(self.msg_frame, height=100)
-        self.msg_input.pack(fill="x", padx=20, pady=10)
+        self.template_tabs = ctk.CTkTabview(self.msg_frame, command=self._on_template_tab_changed)
+        self.template_tabs.pack(fill="x", padx=20, pady=10)
+        self.template_boxes = []
+        self.template_count_labels = []
+        for index in range(1, 11):
+            tab = self.template_tabs.add(f"Template {index}")
+            box = ctk.CTkTextbox(tab, height=120)
+            box.pack(fill="x", padx=10, pady=(10, 6))
+            count_label = ctk.CTkLabel(tab, text=f"Chars: 0/{self._template_max_chars}", text_color="#8a8a8a")
+            count_label.pack(anchor="e", padx=10, pady=(0, 8))
+            box.bind("<<Modified>>", lambda event, idx=index - 1, ref=box: self._on_template_modified(idx, ref))
+            self.template_boxes.append(box)
+            self.template_count_labels.append(count_label)
         self.friend_request_toggle = ctk.CTkCheckBox(
             self.msg_frame,
             text="Send friend request before DM",
