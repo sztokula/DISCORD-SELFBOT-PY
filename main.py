@@ -3,7 +3,6 @@ import queue
 import re
 import threading
 from datetime import datetime
-from pathlib import Path
 from tkinter import filedialog
 from urllib.parse import urlparse
 from database import DatabaseManager
@@ -414,6 +413,24 @@ class MassDMApp(ctk.CTk):
                 invalid.append(value)
         return ids, invalid
 
+    def _parse_user_ids_from_file(self, file_path):
+        ids = []
+        invalid = []
+        try:
+            with open(file_path, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    value = line.strip()
+                    if not value:
+                        continue
+                    if re.match(r"^\d{17,20}$", value):
+                        ids.append(value)
+                    else:
+                        invalid.append(value)
+        except OSError as exc:
+            self.log_error(f"Nie można odczytać pliku: {exc}")
+            return [], []
+        return ids, invalid
+
     def add_targets_from_input(self):
         raw = self.target_input.get("1.0", "end")
         ids, invalid = self._parse_user_ids(raw)
@@ -434,12 +451,7 @@ class MassDMApp(ctk.CTk):
         )
         if not file_path:
             return
-        try:
-            content = Path(file_path).read_text(encoding="utf-8")
-        except OSError as exc:
-            self.log_error(f"Nie można odczytać pliku: {exc}")
-            return
-        ids, invalid = self._parse_user_ids(content)
+        ids, invalid = self._parse_user_ids_from_file(file_path)
         if not ids:
             self.log_error("Brak poprawnych ID w pliku.")
             return
