@@ -131,3 +131,36 @@
 [2026-01-20 18:27:27] [Captcha] Zapisano ustawienia dla capsolver.
 [2026-01-20 18:27:27] [Settings] Removed version endpoint.
 [2026-01-20 18:27:27] [Profile] Saved profile settings.
+[2026-01-20 19:08:24] [Error] Proxy is empty.
+[2026-01-20 19:08:26] [Accounts] Invalid token encryption key.
+[2026-01-20 19:08:26] [Accounts] Skipping account 1 - invalid encryption key.
+[2026-01-20 19:08:26] [Accounts] Invalid token encryption key.
+[2026-01-20 19:08:26] [Accounts] Skipping account 2 - invalid encryption key.
+[2026-01-20 19:08:26] [Accounts] Invalid token encryption key.
+[2026-01-20 19:08:26] [Accounts] Skipping account 3 - invalid encryption key.
+[2026-01-20 19:08:26] [Accounts] Invalid token encryption key.
+[2026-01-20 19:08:26] [Accounts] Skipping account 4 - invalid encryption key.
+[2026-01-20 19:08:26] [Error] [Proxy] No active accounts to test.
+[2026-01-20 19:08:29] [Settings] Zapisano ustawienia delay.
+[2026-01-20 19:08:29] [Templates] Saved message templates.
+[2026-01-20 19:08:29] [Joiner] Saved 1 invites.
+[2026-01-20 19:08:29] [Captcha] Zapisano ustawienia dla capsolver.
+[2026-01-20 19:08:29] [Settings] Removed version endpoint.
+[2026-01-20 19:08:29] [Profile] Saved profile settings.
+[2026-01-20 19:08:39] [Accounts] Invalid token encryption key.
+[2026-01-20 19:08:39] [Accounts] Skipping account 1 - invalid encryption key.
+[2026-01-20 19:08:39] [Accounts] Invalid token encryption key.
+[2026-01-20 19:08:39] [Accounts] Skipping account 2 - invalid encryption key.
+[2026-01-20 19:08:39] [Accounts] Invalid token encryption key.
+[2026-01-20 19:08:39] [Accounts] Skipping account 3 - invalid encryption key.
+[2026-01-20 19:08:39] [Accounts] Invalid token encryption key.
+[2026-01-20 19:08:39] [Accounts] Skipping account 4 - invalid encryption key.
+[2026-01-20 19:08:39] [Error] [Proxy] No accounts available for join.
+[2026-01-20 19:08:39] [Error] Joining failed or was cancelled.
+[2026-01-20 19:11:39] [Accounts] Removed account 1.
+[2026-01-20 19:11:40] [Accounts] Removed account 2.
+[2026-01-20 19:11:41] [Accounts] Removed account 3.
+[2026-01-20 19:11:42] [Accounts] Removed account 4.
+[2026-01-20 19:11:52] [Error] Invalid token format.
+[2026-01-20 19:11:58] [Error] Invalid token format.
+[2026-01-20 19:12:03] [Error] Invalid token format.

@@ -2794,7 +2794,7 @@ class MassDMApp(ctk.CTk):
         # 2. JOINER SECTION (NEW)
         self.joiner_frame = ctk.CTkFrame(parent)
         self.joiner_frame.pack(fill="x", pady=10)
-        ctk.CTkLabel(self.joiner_frame, text="Server Joiner (Mass Join)", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        ctk.CTkLabel(self.joiner_frame, text="Invitation Links to Servers", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
         ctk.CTkLabel(self.joiner_frame, text="Invite links/codes (one per line)").grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 2), sticky="w")
         self.invite_input = ctk.CTkTextbox(self.joiner_frame, height=80, width=350)
         self.invite_input.grid(row=2, column=0, padx=10, pady=5)

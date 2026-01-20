@@ -5,3 +5,10 @@
 [2026-01-20 15:40:24] Error: Version endpoint is empty. Fill it in settings.
 [2026-01-20 15:42:10] Error: Enter an account ID to remove.
 [2026-01-20 16:05:15] Error: Invalid token: empty field.
+[2026-01-20 19:08:24] [Error] Proxy is empty.
+[2026-01-20 19:08:26] [Error] [Proxy] No active accounts to test.
+[2026-01-20 19:08:39] [Error] [Proxy] No accounts available for join.
+[2026-01-20 19:08:39] [Error] Joining failed or was cancelled.
+[2026-01-20 19:11:52] [Error] Invalid token format.
+[2026-01-20 19:11:58] [Error] Invalid token format.
+[2026-01-20 19:12:03] [Error] Invalid token format.
