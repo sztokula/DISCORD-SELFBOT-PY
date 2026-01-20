@@ -4,3 +4,4 @@
 [2026-01-20 15:40:20] [Captcha] Error (2captcha) - Missing API key.
 [2026-01-20 15:40:24] Error: Version endpoint is empty. Fill it in settings.
 [2026-01-20 15:42:10] Error: Enter an account ID to remove.
+[2026-01-20 16:05:15] Error: Invalid token: empty field.

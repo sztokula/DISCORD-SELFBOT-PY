@@ -1662,29 +1662,34 @@ class MassDMApp(ctk.CTk):
         self.acc_frame = ctk.CTkFrame(parent)
         self.acc_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.acc_frame, text="Account & Proxy Management", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        ctk.CTkLabel(self.acc_frame, text="Discord Token").grid(row=1, column=0, padx=10, pady=(0, 2), sticky="w")
         self.token_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Discord Token", width=350)
-        self.token_input.grid(row=1, column=0, padx=10, pady=5)
+        self.token_input.grid(row=2, column=0, padx=10, pady=5)
+        ctk.CTkLabel(self.acc_frame, text="Proxy (http://user:pass@ip:port)").grid(row=3, column=0, padx=10, pady=(0, 2), sticky="w")
         self.proxy_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Proxy (http://user:pass@ip:port)", width=350)
-        self.proxy_input.grid(row=2, column=0, padx=10, pady=5)
+        self.proxy_input.grid(row=4, column=0, padx=10, pady=5)
+        ctk.CTkLabel(self.acc_frame, text="DM daily limit").grid(row=5, column=0, padx=10, pady=(0, 2), sticky="w")
         self.dm_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="DM daily limit (np. 15)", width=350)
-        self.dm_limit_input.grid(row=3, column=0, padx=10, pady=5)
+        self.dm_limit_input.grid(row=6, column=0, padx=10, pady=5)
         self.dm_limit_input.insert(0, "15")
+        ctk.CTkLabel(self.acc_frame, text="Join daily limit").grid(row=7, column=0, padx=10, pady=(0, 2), sticky="w")
         self.join_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Join daily limit (np. 5)", width=350)
-        self.join_limit_input.grid(row=4, column=0, padx=10, pady=5)
+        self.join_limit_input.grid(row=8, column=0, padx=10, pady=5)
         self.join_limit_input.insert(0, "5")
         self.add_acc_btn = ctk.CTkButton(self.acc_frame, text="Add Account", command=self.add_account)
-        self.add_acc_btn.grid(row=1, column=1, rowspan=4, padx=10, pady=5, sticky="ns")
+        self.add_acc_btn.grid(row=2, column=1, rowspan=7, padx=10, pady=5, sticky="ns")
+        ctk.CTkLabel(self.acc_frame, text="Account ID to remove").grid(row=9, column=0, padx=10, pady=(0, 2), sticky="w")
         self.remove_account_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Account ID to remove", width=350)
-        self.remove_account_input.grid(row=5, column=0, padx=10, pady=5)
+        self.remove_account_input.grid(row=10, column=0, padx=10, pady=5)
         self.remove_account_btn = ctk.CTkButton(self.acc_frame, text="Remove Account", fg_color="#e74c3c", command=self.remove_account_by_id)
-        self.remove_account_btn.grid(row=5, column=1, padx=10, pady=5)
+        self.remove_account_btn.grid(row=10, column=1, padx=10, pady=5)
         self.export_banlist_plaintext_toggle = ctk.CTkCheckBox(
             self.acc_frame,
             text="Export banlist tokens in plaintext (unsafe)",
             variable=self.export_banned_tokens_plaintext_var,
             command=self.on_export_plaintext_toggle,
         )
-        self.export_banlist_plaintext_toggle.grid(row=6, column=0, columnspan=2, padx=10, pady=(5, 0), sticky="w")
+        self.export_banlist_plaintext_toggle.grid(row=11, column=0, columnspan=2, padx=10, pady=(5, 0), sticky="w")
 
         self.acc_overview_frame = ctk.CTkFrame(parent)
         self.acc_overview_frame.pack(fill="x", pady=10)
@@ -1811,8 +1816,9 @@ class MassDMApp(ctk.CTk):
         self.joiner_frame = ctk.CTkFrame(parent)
         self.joiner_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.joiner_frame, text="Server Joiner (Mass Join)", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        ctk.CTkLabel(self.joiner_frame, text="Invite links/codes (one per line)").grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 2), sticky="w")
         self.invite_input = ctk.CTkTextbox(self.joiner_frame, height=80, width=350)
-        self.invite_input.grid(row=1, column=0, padx=10, pady=5)
+        self.invite_input.grid(row=2, column=0, padx=10, pady=5)
         self.invite_input.insert("1.0", "Invite link/code per line (e.g. discord.gg/xyz)\n")
         self.invite_save_btn = ctk.CTkButton(
             self.joiner_frame,
@@ -1820,10 +1826,10 @@ class MassDMApp(ctk.CTk):
             fg_color="#3498db",
             command=self.save_invite_settings,
         )
-        self.invite_save_btn.grid(row=1, column=1, padx=10, pady=5)
+        self.invite_save_btn.grid(row=2, column=1, padx=10, pady=5)
         self._load_invite_settings()
 
-        # 3. SEKCJA CAPTCHA
+        # 3. CAPTCHA SECTION
         self.captcha_frame = ctk.CTkFrame(parent)
         self.captcha_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.captcha_frame, text="Captcha Solver (CapSolver / 2Captcha / Anti-Captcha)", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=3, pady=10)
@@ -1834,19 +1840,21 @@ class MassDMApp(ctk.CTk):
         }
         self.captcha_provider_display = {value: key for key, value in self.captcha_provider_labels.items()}
         self.captcha_provider_var = ctk.StringVar(value=self.captcha_provider_display["capsolver"])
+        ctk.CTkLabel(self.captcha_frame, text="Provider").grid(row=1, column=0, padx=10, pady=(0, 2), sticky="w")
+        ctk.CTkLabel(self.captcha_frame, text="API Key").grid(row=1, column=1, padx=10, pady=(0, 2), sticky="w")
         self.captcha_provider = ctk.CTkOptionMenu(
             self.captcha_frame,
             values=list(self.captcha_provider_labels.keys()),
             variable=self.captcha_provider_var,
             command=self.on_captcha_provider_change,
         )
-        self.captcha_provider.grid(row=1, column=0, padx=10, pady=5)
+        self.captcha_provider.grid(row=2, column=0, padx=10, pady=5)
         self.captcha_key_input = ctk.CTkEntry(self.captcha_frame, placeholder_text="API Key", width=350)
-        self.captcha_key_input.grid(row=1, column=1, padx=10, pady=5)
+        self.captcha_key_input.grid(row=2, column=1, padx=10, pady=5)
         self.captcha_save_btn = ctk.CTkButton(self.captcha_frame, text="Save", command=self.save_captcha_settings)
-        self.captcha_save_btn.grid(row=1, column=2, padx=10, pady=5)
+        self.captcha_save_btn.grid(row=2, column=2, padx=10, pady=5)
         self.captcha_test_btn = ctk.CTkButton(self.captcha_frame, text="Test API", fg_color="#16a085", command=self.test_captcha_settings)
-        self.captcha_test_btn.grid(row=2, column=1, padx=10, pady=5)
+        self.captcha_test_btn.grid(row=3, column=1, padx=10, pady=5)
         self._load_captcha_settings()
 
         self.version_frame = ctk.CTkFrame(parent)
@@ -1926,43 +1934,48 @@ class MassDMApp(ctk.CTk):
         self.status_frame = ctk.CTkFrame(parent)
         self.status_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.status_frame, text="Status & Presence", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        ctk.CTkLabel(self.status_frame, text="Custom Status").grid(row=1, column=0, padx=10, pady=(0, 2), sticky="w")
+        ctk.CTkLabel(self.status_frame, text="Status Type").grid(row=1, column=1, padx=10, pady=(0, 2), sticky="w")
         self.status_text_input = ctk.CTkEntry(self.status_frame, placeholder_text="Custom Status", width=350)
-        self.status_text_input.grid(row=1, column=0, padx=10, pady=5)
+        self.status_text_input.grid(row=2, column=0, padx=10, pady=5)
         self.status_text_input.insert(0, "Playing Metin2")
         self.status_type_var = ctk.StringVar(value="online")
         self.status_dropdown = ctk.CTkOptionMenu(self.status_frame, values=["online", "idle", "dnd", "invisible"], variable=self.status_type_var)
-        self.status_dropdown.grid(row=1, column=1, padx=10, pady=5)
+        self.status_dropdown.grid(row=2, column=1, padx=10, pady=5)
         self.update_status_btn = ctk.CTkButton(self.status_frame, text="Start Auto Status", fg_color="#9b59b6", command=self.start_status_update)
-        self.update_status_btn.grid(row=2, column=0, pady=10, sticky="w")
+        self.update_status_btn.grid(row=3, column=0, pady=10, sticky="w")
         self.stop_status_btn = ctk.CTkButton(self.status_frame, text="Stop Auto Status", fg_color="#c0392b", command=self.stop_status_update)
-        self.stop_status_btn.grid(row=2, column=1, pady=10, sticky="e")
+        self.stop_status_btn.grid(row=3, column=1, pady=10, sticky="e")
         self.status_state_label = ctk.CTkLabel(
             self.status_frame,
             text="Auto status: stopped",
             text_color="#8a8a8a",
             anchor="w",
         )
-        self.status_state_label.grid(row=3, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="w")
+        self.status_state_label.grid(row=4, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="w")
 
         # 5. SEKCJA SCRAPERA
         self.scrape_frame = ctk.CTkFrame(parent)
         self.scrape_frame.pack(fill="x", pady=10)
-        ctk.CTkLabel(self.scrape_frame, text="Scraping Tools", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        ctk.CTkLabel(self.scrape_frame, text="Scraping Tools", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=3, pady=10)
+        ctk.CTkLabel(self.scrape_frame, text="Channel ID").grid(row=1, column=0, padx=10, pady=(0, 2), sticky="w")
+        ctk.CTkLabel(self.scrape_frame, text="Range (limit)").grid(row=1, column=1, padx=10, pady=(0, 2), sticky="w")
         self.scrape_channel_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Channel ID", width=220)
-        self.scrape_channel_input.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.scrape_channel_input.grid(row=2, column=0, padx=10, pady=5, sticky="w")
         self.scrape_range_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Range (limit)", width=140)
-        self.scrape_range_input.grid(row=1, column=1, padx=10, pady=5, sticky="w")
+        self.scrape_range_input.grid(row=2, column=1, padx=10, pady=5, sticky="w")
         self.scrape_btn = ctk.CTkButton(self.scrape_frame, text="Scrape Users", command=self.start_scraping)
-        self.scrape_btn.grid(row=1, column=2, padx=10, pady=5)
+        self.scrape_btn.grid(row=2, column=2, padx=10, pady=5)
+        ctk.CTkLabel(self.scrape_frame, text="Guild ID").grid(row=3, column=0, padx=10, pady=(0, 2), sticky="w")
         self.scrape_guild_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Guild ID", width=350)
-        self.scrape_guild_input.grid(row=2, column=0, padx=10, pady=5, columnspan=2, sticky="w")
+        self.scrape_guild_input.grid(row=4, column=0, padx=10, pady=5, columnspan=2, sticky="w")
         self.scrape_guild_btn = ctk.CTkButton(
             self.scrape_frame,
             text="Scrape Guild Members",
             fg_color="#16a085",
             command=self.start_guild_scraping,
         )
-        self.scrape_guild_btn.grid(row=2, column=2, padx=10, pady=5, sticky="w")
+        self.scrape_guild_btn.grid(row=4, column=2, padx=10, pady=5, sticky="w")
         self.refresh_accounts_overview()
         self.refresh_targets_overview()
         self.refresh_banlist_overview()
