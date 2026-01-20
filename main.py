@@ -40,6 +40,7 @@ class MassDMApp(ctk.CTk):
         self.log_entries = []
         self.error_entries = []
         self.log_filter_var = ctk.StringVar()
+        self.log_level_var = ctk.StringVar(value="All")
         self.logs_dir = Path("logs")
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.log_file_path = self.logs_dir / f"app_{datetime.now().strftime('%Y%m%d')}.log"
@@ -89,6 +90,14 @@ class MassDMApp(ctk.CTk):
         self.log_frame.pack(fill="both", expand=True, pady=10)
         self.log_controls = ctk.CTkFrame(self.log_frame, fg_color="transparent")
         self.log_controls.pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkLabel(self.log_controls, text="Type:", text_color="#b0b0b0").pack(side="left")
+        self.log_level_menu = ctk.CTkOptionMenu(
+            self.log_controls,
+            values=["All", "Error", "Warning", "Info"],
+            variable=self.log_level_var,
+        )
+        self.log_level_menu.pack(side="left", padx=(5, 15))
+        self.log_level_var.trace_add("write", self.apply_log_filter)
         ctk.CTkLabel(self.log_controls, text="Log filter:", text_color="#b0b0b0").pack(side="left")
         self.log_filter_input = ctk.CTkEntry(
             self.log_controls,
@@ -126,7 +135,8 @@ class MassDMApp(ctk.CTk):
 
     def add_log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.log_queue.put({"timestamp": timestamp, "message": message})
+        level = self._get_log_level(message)
+        self.log_queue.put({"timestamp": timestamp, "message": message, "level": level})
 
     def log_error(self, message):
         self.add_log(f"Błąd: {message}")
@@ -253,10 +263,22 @@ class MassDMApp(ctk.CTk):
         self.error_box.see("end")
 
     def _is_error_entry(self, entry):
-        return entry["message"].strip().casefold().startswith("błąd:")
+        return entry["level"] == "Error"
+
+    def _get_log_level(self, message):
+        normalized = message.strip().casefold()
+        if "błąd" in normalized or normalized.startswith("[!]"):
+            return "Error"
+        if normalized.startswith("ostrzeżenie") or normalized.startswith("warning"):
+            return "Warning"
+        return "Info"
 
     def _matches_log_filter(self, entry):
         filter_text = self.log_filter_var.get().strip().lower()
+        level_filter = self.log_level_var.get().strip().casefold()
+        if level_filter and level_filter != "all":
+            if entry["level"].casefold() != level_filter:
+                return False
         if not filter_text:
             return True
         return filter_text in entry["message"].lower() or filter_text in entry["timestamp"].lower()
