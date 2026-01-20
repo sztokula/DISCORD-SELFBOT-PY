@@ -59,6 +59,13 @@ class MassDMApp(ctk.CTk):
         ).pack(pady=(0, 5))
         self.msg_input = ctk.CTkTextbox(self.msg_frame, height=100)
         self.msg_input.pack(fill="x", padx=20, pady=10)
+        self.friend_request_var = ctk.BooleanVar(value=False)
+        self.friend_request_toggle = ctk.CTkCheckBox(
+            self.msg_frame,
+            text="Wyślij zaproszenie do znajomych przed DM",
+            variable=self.friend_request_var,
+        )
+        self.friend_request_toggle.pack(anchor="w", padx=20, pady=(0, 10))
 
         # 2. SEKCJA LOGÓW
         self.log_frame = ctk.CTkFrame(self.main_container)
@@ -245,7 +252,8 @@ class MassDMApp(ctk.CTk):
         if not templates:
             self.log_error("Brak poprawnych szablonów wiadomości.")
             return
-        thread = threading.Thread(target=self.worker.run_mission, args=(templates, 5, 10))
+        use_friend_req = self.friend_request_var.get()
+        thread = threading.Thread(target=self.worker.run_mission, args=(templates, 5, 10, use_friend_req))
         thread.daemon = True
         thread.start()
 
