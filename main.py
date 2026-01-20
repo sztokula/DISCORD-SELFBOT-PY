@@ -18,6 +18,7 @@ from joiner import DiscordJoiner # Import new module
 from token_manager import TokenManager
 from updater import UpdateManager, UpdateError
 from metrics import HealthMetrics
+from profile_updater import ProfileUpdater
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -45,12 +46,13 @@ class MassDMApp(ctk.CTk):
         )
         
         self.metrics = HealthMetrics()
-        self.worker = DiscordWorker(self.db, self.add_log, self.metrics)
+        self.captcha_solver = CaptchaSolver(self.db, self.add_log)
+        self.worker = DiscordWorker(self.db, self.add_log, self.metrics, self.captcha_solver)
         self.scraper = DiscordScraper(self.db, self.add_log, self.metrics)
         self.status_changer = StatusChanger(self.db, self.add_log, self.metrics)
-        self.captcha_solver = CaptchaSolver(self.db, self.add_log)
         self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver, self.metrics) # Inicjalizacja
         self.token_manager = TokenManager(self.db, self.add_log, self.metrics)
+        self.profile_updater = ProfileUpdater(self.db, self.add_log, self.metrics)
         self.log_entries = []
         self.error_entries = []
         self.max_log_entries = 2000
@@ -172,6 +174,11 @@ class MassDMApp(ctk.CTk):
         # 1. MESSAGE SECTION (moved to settings)
         self.friend_request_var = ctk.BooleanVar(value=self._get_setting_bool("use_friend_request", False))
         self.dry_run_var = ctk.BooleanVar(value=self._get_setting_bool("dry_run", False))
+        self.auto_accept_rules_var = ctk.BooleanVar(value=self._get_setting_bool("auto_accept_rules", True))
+        self.auto_onboarding_var = ctk.BooleanVar(value=self._get_setting_bool("auto_onboarding", True))
+        self.profile_change_name_var = ctk.BooleanVar(value=self._get_setting_bool("profile_change_name", False))
+        self.profile_change_avatar_var = ctk.BooleanVar(value=self._get_setting_bool("profile_change_avatar", False))
+        self.profile_append_suffix_var = ctk.BooleanVar(value=self._get_setting_bool("profile_append_suffix", True))
         self.settings_loaded = False
         self.workflow_stage = "setup"
 
@@ -521,6 +528,76 @@ class MassDMApp(ctk.CTk):
         status_type = self.status_type_var.get().strip()
         self.db.set_setting("status_text", status_text or None)
         self.db.set_setting("status_type", status_type or None)
+
+    def save_profile_settings(self):
+        if not hasattr(self, "profile_name_input"):
+            return
+        base_name = self.profile_name_input.get().strip()
+        avatar_path = self.profile_avatar_input.get().strip()
+        self.db.set_setting("profile_base_name", base_name or None)
+        self.db.set_setting("profile_avatar_path", avatar_path or None)
+        self._set_setting_bool("profile_change_name", self.profile_change_name_var.get())
+        self._set_setting_bool("profile_change_avatar", self.profile_change_avatar_var.get())
+        self._set_setting_bool("profile_append_suffix", self.profile_append_suffix_var.get())
+        self.add_log("[Profile] Saved profile settings.")
+
+    def _load_profile_settings(self):
+        if not hasattr(self, "profile_name_input"):
+            return
+        base_name = self.db.get_setting("profile_base_name", "").strip()
+        avatar_path = self.db.get_setting("profile_avatar_path", "").strip()
+        self.profile_name_input.delete(0, "end")
+        if base_name:
+            self.profile_name_input.insert(0, base_name)
+        self.profile_avatar_input.delete(0, "end")
+        if avatar_path:
+            self.profile_avatar_input.insert(0, avatar_path)
+
+    def browse_avatar_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Select avatar image",
+            filetypes=[
+                ("Image files", "*.png;*.jpg;*.jpeg;*.gif;*.webp"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not file_path:
+            return
+        if hasattr(self, "profile_avatar_input"):
+            self.profile_avatar_input.delete(0, "end")
+            self.profile_avatar_input.insert(0, file_path)
+            self._set_input_valid(self.profile_avatar_input, True)
+
+    def apply_profile_settings(self):
+        self.save_profile_settings()
+        change_name = self.profile_change_name_var.get()
+        change_avatar = self.profile_change_avatar_var.get()
+        append_suffix = self.profile_append_suffix_var.get()
+        base_name = self.db.get_setting("profile_base_name", "").strip()
+        avatar_path = self.db.get_setting("profile_avatar_path", "").strip()
+        if change_name and not base_name:
+            self.log_error("Profile name is empty.")
+            self._set_input_valid(self.profile_name_input, False)
+            return
+        self._set_input_valid(self.profile_name_input, True)
+        avatar_data = None
+        if change_avatar:
+            if not avatar_path:
+                self.log_error("Avatar path is empty.")
+                self._set_input_valid(self.profile_avatar_input, False)
+                return
+            avatar_data, err = self.profile_updater.load_avatar_data(avatar_path)
+            if err:
+                self.log_error(err)
+                self._set_input_valid(self.profile_avatar_input, False)
+                return
+        self._set_input_valid(self.profile_avatar_input, True)
+        thread = threading.Thread(
+            target=self.profile_updater.update_profiles,
+            args=(base_name, avatar_data, change_name, change_avatar, append_suffix),
+            daemon=True,
+        )
+        thread.start()
 
     def _show_template_help(self):
         message = (
@@ -1310,6 +1387,7 @@ class MassDMApp(ctk.CTk):
             return
         self.db.set_setting("join_invites", "\n".join(invites))
         self.add_log(f"[Joiner] Saved {len(invites)} invites.")
+        self.save_joiner_settings()
         self.refresh_workflow_status()
 
     def _load_invite_settings(self):
@@ -1320,6 +1398,45 @@ class MassDMApp(ctk.CTk):
         if stored:
             self.invite_input.insert("1.0", stored)
 
+    def _parse_role_ids(self, raw_text):
+        ids = []
+        invalid = []
+        for line in raw_text.splitlines():
+            value = line.strip()
+            if not value:
+                continue
+            matches = self._extract_user_ids(value)
+            if matches:
+                ids.extend(matches)
+            else:
+                invalid.append(value)
+        unique_ids = list(dict.fromkeys(ids))
+        return unique_ids, invalid
+
+    def save_joiner_settings(self):
+        if not hasattr(self, "onboarding_role_whitelist_input"):
+            return
+        raw = self.onboarding_role_whitelist_input.get("1.0", "end").strip()
+        if not raw:
+            self.db.set_setting("onboarding_role_whitelist", None)
+            return
+        role_ids, invalid = self._parse_role_ids(raw)
+        if invalid:
+            self.log_warning(f"Invalid role IDs (skipping): {', '.join(invalid)}")
+        if role_ids:
+            self.db.set_setting("onboarding_role_whitelist", "\n".join(role_ids))
+            self.add_log(f"[Joiner] Saved {len(role_ids)} role IDs for onboarding.")
+        else:
+            self.db.set_setting("onboarding_role_whitelist", None)
+
+    def _load_joiner_settings(self):
+        if not hasattr(self, "onboarding_role_whitelist_input"):
+            return
+        stored = self.db.get_setting("onboarding_role_whitelist", "")
+        self.onboarding_role_whitelist_input.delete("1.0", "end")
+        if stored:
+            self.onboarding_role_whitelist_input.insert("1.0", stored)
+
     def start_joining(self, on_complete=None):
         if not self.module_vars["joiner"].get():
             self.log_error("Joiner module is disabled.")
@@ -1328,6 +1445,23 @@ class MassDMApp(ctk.CTk):
         if not invites:
             self.log_error("No saved invites. Open settings and save the server list.")
             return False
+        if hasattr(self, "auto_accept_rules_var"):
+            auto_accept_rules = self.auto_accept_rules_var.get()
+        else:
+            auto_accept_rules = self._get_setting_bool("auto_accept_rules", True)
+        if hasattr(self, "auto_onboarding_var"):
+            auto_onboarding = self.auto_onboarding_var.get()
+        else:
+            auto_onboarding = self._get_setting_bool("auto_onboarding", True)
+        if hasattr(self, "onboarding_role_whitelist_input") and self.onboarding_role_whitelist_input.winfo_exists():
+            raw_roles = self.onboarding_role_whitelist_input.get("1.0", "end")
+        else:
+            raw_roles = self.db.get_setting("onboarding_role_whitelist", "")
+        role_whitelist = []
+        if raw_roles:
+            role_whitelist, invalid = self._parse_role_ids(raw_roles)
+            if invalid:
+                self.log_warning(f"Invalid role IDs (skipping): {', '.join(invalid)}")
         if hasattr(self, "join_delay_min_input") and self.join_delay_min_input.winfo_exists():
             join_delay = self._parse_delay_range(
                 self.join_delay_min_input,
@@ -1351,7 +1485,15 @@ class MassDMApp(ctk.CTk):
         self.db.set_setting("join_delay_max", str(join_delay_max))
         thread = threading.Thread(
             target=self.joiner.run_mass_join,
-            args=(invites, join_delay_min, join_delay_max, on_complete),
+            args=(
+                invites,
+                join_delay_min,
+                join_delay_max,
+                on_complete,
+                auto_accept_rules,
+                auto_onboarding,
+                role_whitelist,
+            ),
         )
         thread.daemon = True
         thread.start()
@@ -1856,8 +1998,12 @@ class MassDMApp(ctk.CTk):
             self.save_captcha_settings()
             self.save_version_settings()
             self.save_status_settings()
+            self.save_profile_settings()
+            self.save_joiner_settings()
             self._set_setting_bool("use_friend_request", self.friend_request_var.get())
             self._set_setting_bool("dry_run", self.dry_run_var.get())
+            self._set_setting_bool("auto_accept_rules", self.auto_accept_rules_var.get())
+            self._set_setting_bool("auto_onboarding", self.auto_onboarding_var.get())
             self.settings_window.destroy()
             self.refresh_workflow_status()
         self.settings_window = None
@@ -2051,6 +2197,58 @@ class MassDMApp(ctk.CTk):
         self.acc_reset_btn = ctk.CTkButton(self.acc_overview_frame, text="Reset Counters", fg_color="#f39c12", hover_color="#d35400", command=self.reset_account_counters)
         self.acc_reset_btn.grid(row=3, column=1, padx=10, pady=5)
 
+        self.profile_frame = ctk.CTkFrame(parent)
+        self.profile_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(self.profile_frame, text="Profile (Name & Avatar)", font=ctk.CTkFont(size=16, weight="bold")).grid(
+            row=0, column=0, columnspan=3, pady=10
+        )
+        ctk.CTkLabel(self.profile_frame, text="Base name").grid(row=1, column=0, padx=10, pady=(0, 2), sticky="w")
+        self.profile_name_input = ctk.CTkEntry(self.profile_frame, placeholder_text="Base name", width=260)
+        self.profile_name_input.grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.profile_change_name_toggle = ctk.CTkCheckBox(
+            self.profile_frame,
+            text="Change name",
+            variable=self.profile_change_name_var,
+        )
+        self.profile_change_name_toggle.grid(row=2, column=1, padx=10, pady=5, sticky="w")
+        self.profile_append_suffix_toggle = ctk.CTkCheckBox(
+            self.profile_frame,
+            text="Add unique suffix",
+            variable=self.profile_append_suffix_var,
+        )
+        self.profile_append_suffix_toggle.grid(row=2, column=2, padx=10, pady=5, sticky="w")
+
+        ctk.CTkLabel(self.profile_frame, text="Avatar image file").grid(row=3, column=0, padx=10, pady=(0, 2), sticky="w")
+        self.profile_avatar_input = ctk.CTkEntry(self.profile_frame, placeholder_text="Avatar file path", width=260)
+        self.profile_avatar_input.grid(row=4, column=0, padx=10, pady=5, sticky="w")
+        self.profile_avatar_browse_btn = ctk.CTkButton(
+            self.profile_frame,
+            text="Browse",
+            width=100,
+            command=self.browse_avatar_file,
+        )
+        self.profile_avatar_browse_btn.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+        self.profile_change_avatar_toggle = ctk.CTkCheckBox(
+            self.profile_frame,
+            text="Change avatar",
+            variable=self.profile_change_avatar_var,
+        )
+        self.profile_change_avatar_toggle.grid(row=4, column=2, padx=10, pady=5, sticky="w")
+        self.profile_save_btn = ctk.CTkButton(
+            self.profile_frame,
+            text="Save Profile",
+            command=self.save_profile_settings,
+        )
+        self.profile_save_btn.grid(row=5, column=0, padx=10, pady=(5, 10), sticky="w")
+        self.profile_apply_btn = ctk.CTkButton(
+            self.profile_frame,
+            text="Apply to Accounts",
+            fg_color="#1abc9c",
+            command=self.apply_profile_settings,
+        )
+        self.profile_apply_btn.grid(row=5, column=1, padx=10, pady=(5, 10), sticky="w")
+        self._load_profile_settings()
+
         self.module_frame = ctk.CTkFrame(parent)
         self.module_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.module_frame, text="Module Switches", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
@@ -2200,7 +2398,32 @@ class MassDMApp(ctk.CTk):
             command=self.save_invite_settings,
         )
         self.invite_save_btn.grid(row=2, column=1, padx=10, pady=5)
+        self.joiner_rules_toggle = ctk.CTkCheckBox(
+            self.joiner_frame,
+            text="Accept rules after join",
+            variable=self.auto_accept_rules_var,
+        )
+        self.joiner_rules_toggle.grid(row=3, column=0, padx=10, pady=5, sticky="w")
+        self.joiner_onboarding_toggle = ctk.CTkCheckBox(
+            self.joiner_frame,
+            text="Complete onboarding (select all roles)",
+            variable=self.auto_onboarding_var,
+        )
+        self.joiner_onboarding_toggle.grid(row=4, column=0, padx=10, pady=(0, 10), sticky="w")
+        ctk.CTkLabel(
+            self.joiner_frame,
+            text="Role whitelist (IDs, one per line)",
+        ).grid(row=5, column=0, padx=10, pady=(0, 2), sticky="w")
+        self.onboarding_role_whitelist_input = ctk.CTkTextbox(self.joiner_frame, height=80, width=350)
+        self.onboarding_role_whitelist_input.grid(row=6, column=0, padx=10, pady=5, sticky="w")
+        self.joiner_onboarding_hint = ctk.CTkLabel(
+            self.joiner_frame,
+            text="If set, onboarding selects matching roles, otherwise falls back to first options.",
+            text_color="#8a8a8a",
+        )
+        self.joiner_onboarding_hint.grid(row=7, column=0, padx=10, pady=(0, 10), sticky="w")
         self._load_invite_settings()
+        self._load_joiner_settings()
 
         # 3. CAPTCHA SECTION
         self.captcha_frame = ctk.CTkFrame(parent)

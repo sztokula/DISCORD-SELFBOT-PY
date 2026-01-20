@@ -9,6 +9,8 @@ class DiscordJoiner:
         self.is_running = False
         self.captcha_solver = captcha_solver
         self.metrics = metrics
+        self.max_retries = 3
+        self.backoff_factor = 1.5
 
     def _record_request(self, duration, response=None):
         if not self.metrics:
@@ -66,7 +68,16 @@ class DiscordJoiner:
             self.db.remove_account(account_id)
         return None, True
 
-    def join_server(self, account_id, token, invite_code, proxy=None):
+    def join_server(
+        self,
+        account_id,
+        token,
+        invite_code,
+        proxy=None,
+        auto_accept_rules=True,
+        auto_onboarding=True,
+        role_whitelist=None,
+    ):
         """invite_code: only the invite slug, e.g. 'cool-server' from discord.gg/cool-server"""
         # Strip invite code in case a full link is pasted.
         invite_code = invite_code.split("/")[-1]
@@ -80,13 +91,10 @@ class DiscordJoiner:
         
         proxies = {"all://": proxy} if proxy else None
         
-        max_retries = 3
-        backoff_factor = 1.5
-
         try:
             with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 refreshed = False
-                for attempt in range(max_retries + 1):
+                for attempt in range(self.max_retries + 1):
                     start = time.monotonic()
                     response = client.post(url, json={})
                     self._record_request(time.monotonic() - start, response)
@@ -94,9 +102,17 @@ class DiscordJoiner:
                         token, refreshed = self._handle_unauthorized(client, account_id, token, refreshed)
                         if token:
                             continue
-                        return False, "Unauthorized (token)"
+                        return False, "Unauthorized (token)", None
                     if response.status_code == 200:
-                        return True, "Success"
+                        guild_id = self._extract_guild_id(response)
+                        self._handle_post_join(
+                            client,
+                            guild_id,
+                            auto_accept_rules,
+                            auto_onboarding,
+                            role_whitelist,
+                        )
+                        return True, "Success", guild_id
                     if response.status_code in {400, 403}:
                         captcha_info = self._extract_captcha(response)
                         if captcha_info and self.captcha_solver:
@@ -109,22 +125,39 @@ class DiscordJoiner:
                                 retry_resp = client.post(url, json=payload)
                                 self._record_request(time.monotonic() - start, retry_resp)
                                 if retry_resp.status_code == 200:
-                                    return True, "Success (captcha)"
-                                return False, f"Post-captcha error: {retry_resp.status_code}"
-                            return False, f"Captcha error: {token_or_err}"
-                        return False, "Verification required (Captcha/Phone)"
+                                    guild_id = self._extract_guild_id(retry_resp)
+                                    self._handle_post_join(
+                                        client,
+                                        guild_id,
+                                        auto_accept_rules,
+                                        auto_onboarding,
+                                        role_whitelist,
+                                    )
+                                    return True, "Success (captcha)", guild_id
+                                return False, f"Post-captcha error: {retry_resp.status_code}", None
+                            return False, f"Captcha error: {token_or_err}", None
+                        return False, "Verification required (Captcha/Phone)", None
                     if response.status_code == 429:
                         retry_after = self._get_retry_after(response)
-                        wait_time = retry_after * (backoff_factor ** attempt)
+                        wait_time = retry_after * (self.backoff_factor ** attempt)
                         self._sleep_with_stop(wait_time)
                         continue
-                    return False, f"Error {response.status_code}"
+                    return False, f"Error {response.status_code}", None
         except Exception as e:
-            return False, str(e)
+            return False, str(e), None
 
-        return False, "Rate Limit (after retries)"
+        return False, "Rate Limit (after retries)", None
 
-    def run_mass_join(self, invite_codes, delay_min, delay_max, on_complete=None):
+    def run_mass_join(
+        self,
+        invite_codes,
+        delay_min,
+        delay_max,
+        on_complete=None,
+        auto_accept_rules=True,
+        auto_onboarding=True,
+        role_whitelist=None,
+    ):
         self.is_running = True
         self.db.reset_daily_counters()
         accounts = self.db.get_active_accounts("discord")
@@ -154,12 +187,23 @@ class DiscordJoiner:
                 self.log(f"[Joiner] Account {acc_id}: daily join limit reached ({join_today}/{join_limit}).")
                 continue
             invite_code = random.choice(invite_codes)
-            success, msg = self.join_server(acc_id, token, invite_code, proxy)
+            success, msg, guild_id = self.join_server(
+                acc_id,
+                token,
+                invite_code,
+                proxy,
+                auto_accept_rules=auto_accept_rules,
+                auto_onboarding=auto_onboarding,
+                role_whitelist=role_whitelist,
+            )
             
             if success:
                 self.db.increment_join_counter(acc_id)
                 joined_any = True
-                self.log(f"[Joiner] Account {acc_id}: JOINED ({invite_code}).")
+                if guild_id:
+                    self.log(f"[Joiner] Account {acc_id}: JOINED ({invite_code}, guild {guild_id}).")
+                else:
+                    self.log(f"[Joiner] Account {acc_id}: JOINED ({invite_code}).")
             else:
                 self.log(f"[Joiner] Account {acc_id}: ERROR ({msg}) [{invite_code}]")
             
@@ -201,3 +245,182 @@ class DiscordJoiner:
             "rqtoken": data.get("captcha_rqtoken"),
             "url": "https://discord.com",
         }
+
+    def _extract_guild_id(self, response):
+        try:
+            data = response.json()
+        except Exception:
+            return None
+        if isinstance(data, dict):
+            guild = data.get("guild") or {}
+            return data.get("guild_id") or guild.get("id")
+        return None
+
+    def _solve_captcha_payload(self, response):
+        captcha_info = self._extract_captcha(response)
+        if not captcha_info:
+            return None, "Captcha required."
+        if not self.captcha_solver:
+            return None, "Captcha solver not configured."
+        solved, token_or_err = self.captcha_solver.solve_captcha(captcha_info)
+        if not solved:
+            return None, f"Captcha error: {token_or_err}"
+        payload = {"captcha_key": token_or_err}
+        if captcha_info.get("rqtoken"):
+            payload["captcha_rqtoken"] = captcha_info["rqtoken"]
+        return payload, None
+
+    def _submit_with_captcha(self, client, method, url, payload):
+        for attempt in range(self.max_retries + 1):
+            start = time.monotonic()
+            resp = client.request(method, url, json=payload)
+            self._record_request(time.monotonic() - start, resp)
+            if resp.status_code in {200, 204}:
+                return True
+            if resp.status_code == 429:
+                retry_after = self._get_retry_after(resp)
+                wait_time = retry_after * (self.backoff_factor ** attempt)
+                self._sleep_with_stop(wait_time)
+                continue
+            if resp.status_code in {400, 403}:
+                captcha_payload, err = self._solve_captcha_payload(resp)
+                if not captcha_payload:
+                    self.log(f"[Captcha] Failed: {err}")
+                    return False
+                retry_payload = dict(payload)
+                retry_payload.update(captcha_payload)
+                start = time.monotonic()
+                retry_resp = client.request(method, url, json=retry_payload)
+                self._record_request(time.monotonic() - start, retry_resp)
+                if retry_resp.status_code in {200, 204}:
+                    return True
+                if retry_resp.status_code == 429:
+                    retry_after = self._get_retry_after(retry_resp)
+                    wait_time = retry_after * (self.backoff_factor ** attempt)
+                    self._sleep_with_stop(wait_time)
+                    continue
+                self.log(f"[Captcha] Post-captcha error: {retry_resp.status_code}")
+                return False
+            self.log(f"[Joiner] Request failed ({resp.status_code}).")
+            return False
+        return False
+
+    def _build_rule_response(self, field):
+        choices = field.get("choices")
+        if not choices:
+            choices = field.get("values")
+        if isinstance(choices, list) and choices:
+            values = []
+            for choice in choices:
+                if isinstance(choice, dict):
+                    value = choice.get("value") or choice.get("id") or choice.get("label")
+                else:
+                    value = choice
+                if value is not None:
+                    values.append(value)
+            if values:
+                return values
+        return True
+
+    def _accept_rules(self, client, guild_id):
+        url = f"https://discord.com/api/v9/guilds/{guild_id}/member-verification?with_guild=false"
+        start = time.monotonic()
+        response = client.get(url)
+        self._record_request(time.monotonic() - start, response)
+        if response.status_code == 404:
+            return True
+        if response.status_code != 200:
+            self.log(f"[Joiner] Rules fetch failed ({response.status_code}).")
+            return False
+        try:
+            data = response.json()
+        except Exception:
+            self.log("[Joiner] Rules response parse failed.")
+            return False
+        form_fields = data.get("form_fields") or []
+        if not form_fields:
+            return True
+        for field in form_fields:
+            field["response"] = self._build_rule_response(field)
+        payload = {
+            "version": data.get("version"),
+            "form_fields": form_fields,
+        }
+        ok = self._submit_with_captcha(
+            client,
+            "PUT",
+            f"https://discord.com/api/v9/guilds/{guild_id}/requests/@me",
+            payload,
+        )
+        if ok:
+            self.log(f"[Joiner] Accepted rules for guild {guild_id}.")
+        return ok
+
+    def _complete_onboarding(self, client, guild_id, role_whitelist=None):
+        url = f"https://discord.com/api/v9/guilds/{guild_id}/onboarding"
+        start = time.monotonic()
+        response = client.get(url)
+        self._record_request(time.monotonic() - start, response)
+        if response.status_code == 404:
+            return True
+        if response.status_code != 200:
+            self.log(f"[Joiner] Onboarding fetch failed ({response.status_code}).")
+            return False
+        try:
+            data = response.json()
+        except Exception:
+            self.log("[Joiner] Onboarding response parse failed.")
+            return False
+        prompts = data.get("prompts") or []
+        if not prompts:
+            return True
+        whitelist = {str(role_id) for role_id in (role_whitelist or [])}
+        responses = []
+        for prompt in prompts:
+            options = prompt.get("options") or []
+            if whitelist:
+                option_ids = []
+                for opt in options:
+                    role_ids = opt.get("role_ids") or []
+                    if any(str(role_id) in whitelist for role_id in role_ids):
+                        opt_id = opt.get("id")
+                        if opt_id:
+                            option_ids.append(opt_id)
+                if not option_ids:
+                    option_ids = [opt.get("id") for opt in options if opt.get("id")]
+                    if option_ids:
+                        self.log(
+                            f"[Joiner] No whitelist match for prompt {prompt.get('id')}. Using fallback options."
+                        )
+            else:
+                option_ids = [opt.get("id") for opt in options if opt.get("id")]
+            max_options = prompt.get("max_options")
+            if max_options is None and prompt.get("single_select"):
+                max_options = 1
+            if max_options is not None and len(option_ids) > max_options:
+                option_ids = option_ids[:max_options]
+            responses.append(
+                {
+                    "prompt_id": prompt.get("id"),
+                    "option_ids": option_ids,
+                }
+            )
+        payload = {"onboarding_responses": responses, "guild_id": guild_id}
+        ok = self._submit_with_captcha(
+            client,
+            "POST",
+            f"https://discord.com/api/v9/guilds/{guild_id}/onboarding-responses",
+            payload,
+        )
+        if ok:
+            self.log(f"[Joiner] Completed onboarding for guild {guild_id}.")
+        return ok
+
+    def _handle_post_join(self, client, guild_id, auto_accept_rules, auto_onboarding, role_whitelist=None):
+        if not guild_id:
+            self.log("[Joiner] Guild id missing; skipping rules/onboarding.")
+            return
+        if auto_accept_rules:
+            self._accept_rules(client, guild_id)
+        if auto_onboarding:
+            self._complete_onboarding(client, guild_id, role_whitelist)

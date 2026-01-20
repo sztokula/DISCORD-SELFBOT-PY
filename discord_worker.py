@@ -4,10 +4,11 @@ import random
 import re
 
 class DiscordWorker:
-    def __init__(self, db_manager, log_callback, metrics=None):
+    def __init__(self, db_manager, log_callback, metrics=None, captcha_solver=None):
         self.db = db_manager
         self.log = log_callback
         self.metrics = metrics
+        self.captcha_solver = captcha_solver
         self.is_running = False
         self.max_retries = 3
         self.backoff_factor = 1.5
@@ -88,14 +89,39 @@ class DiscordWorker:
     def send_friend_request(self, client, user_id):
         """Optional helper that sends a friend request."""
         url = f"https://discord.com/api/v9/users/{user_id}/relationships"
-        try:
-            start = time.monotonic()
-            resp = client.put(url, json={})
-            self._record_request(time.monotonic() - start, resp)
-            return resp.status_code == 204
-        except Exception as e:
-            self.log(f"[Friend Request] Exception for user {user_id}: {e}")
+        for attempt in range(self.max_retries + 1):
+            try:
+                start = time.monotonic()
+                resp = client.put(url, json={})
+                self._record_request(time.monotonic() - start, resp)
+            except Exception as e:
+                self.log(f"[Friend Request] Exception for user {user_id}: {e}")
+                return False
+            if resp.status_code in {200, 204}:
+                return True
+            if resp.status_code == 429:
+                self._wait_for_rate_limit(resp, attempt)
+                continue
+            if resp.status_code in {400, 403}:
+                captcha_payload, err = self._solve_captcha_payload(resp)
+                if not captcha_payload:
+                    self.log(f"[Captcha] Friend request blocked for {user_id}: {err}")
+                    return False
+                start = time.monotonic()
+                retry_resp = client.put(url, json=captcha_payload)
+                self._record_request(time.monotonic() - start, retry_resp)
+                if retry_resp.status_code in {200, 204}:
+                    return True
+                if retry_resp.status_code == 429:
+                    self._wait_for_rate_limit(retry_resp, attempt)
+                    continue
+                self.log(
+                    f"[Friend Request] Post-captcha error for {user_id}: {retry_resp.status_code}"
+                )
+                return False
+            self.log(f"[Friend Request] Error for {user_id}: {resp.status_code}")
             return False
+        return False
 
     def _get_retry_after(self, response, default=5.0):
         retry_header = response.headers.get("Retry-After")
@@ -157,6 +183,37 @@ class DiscordWorker:
             self.db.remove_account(account_id)
         return None, True
 
+    def _extract_captcha(self, response):
+        try:
+            data = response.json()
+        except Exception:
+            return None
+        sitekey = data.get("captcha_sitekey")
+        if not sitekey:
+            return None
+        service = data.get("captcha_service") or "hcaptcha"
+        return {
+            "service": service,
+            "sitekey": sitekey,
+            "rqdata": data.get("captcha_rqdata"),
+            "rqtoken": data.get("captcha_rqtoken"),
+            "url": "https://discord.com",
+        }
+
+    def _solve_captcha_payload(self, response):
+        captcha_info = self._extract_captcha(response)
+        if not captcha_info:
+            return None, "Captcha required."
+        if not self.captcha_solver:
+            return None, "Captcha solver not configured."
+        solved, token_or_err = self.captcha_solver.solve_captcha(captcha_info)
+        if not solved:
+            return None, f"Captcha error: {token_or_err}"
+        payload = {"captcha_key": token_or_err}
+        if captcha_info.get("rqtoken"):
+            payload["captcha_rqtoken"] = captcha_info["rqtoken"]
+        return payload, None
+
     def send_dm(
         self,
         account_id,
@@ -211,11 +268,31 @@ class DiscordWorker:
                             continue
                         return False, "Unauthorized (token)"
                     if response.status_code == 200:
-                        channel_id = response.json()['id']
+                        channel_id = response.json().get("id")
                         break
                     if response.status_code == 429:
                         self._wait_for_rate_limit(response, attempt)
                         continue
+                    if response.status_code in {400, 403}:
+                        captcha_payload, err = self._solve_captcha_payload(response)
+                        if not captcha_payload:
+                            return False, err
+                        captcha_payload["recipient_id"] = user_id
+                        start = time.monotonic()
+                        retry_resp = client.post(url_channel, json=captcha_payload)
+                        self._record_request(time.monotonic() - start, retry_resp)
+                        if retry_resp.status_code == 401:
+                            token, refreshed = self._handle_unauthorized(client, account_id, token, refreshed)
+                            if token:
+                                continue
+                            return False, "Unauthorized (token)"
+                        if retry_resp.status_code == 200:
+                            channel_id = retry_resp.json().get("id")
+                            break
+                        if retry_resp.status_code == 429:
+                            self._wait_for_rate_limit(retry_resp, attempt)
+                            continue
+                        return False, f"Channel captcha error: {retry_resp.status_code}"
                     return False, f"Channel Error: {response.status_code}"
 
                 if not channel_id:
@@ -240,6 +317,26 @@ class DiscordWorker:
                     if msg_resp.status_code == 429:
                         self._wait_for_rate_limit(msg_resp, attempt)
                         continue
+                    if msg_resp.status_code in {400, 403}:
+                        captcha_payload, err = self._solve_captcha_payload(msg_resp)
+                        if not captcha_payload:
+                            return False, err
+                        payload = {"content": final_msg}
+                        payload.update(captcha_payload)
+                        start = time.monotonic()
+                        retry_resp = client.post(msg_url, json=payload)
+                        self._record_request(time.monotonic() - start, retry_resp)
+                        if retry_resp.status_code == 401:
+                            token, refreshed = self._handle_unauthorized(client, account_id, token, refreshed)
+                            if token:
+                                continue
+                            return False, "Unauthorized (token)"
+                        if retry_resp.status_code == 200:
+                            return True, "Success"
+                        if retry_resp.status_code == 429:
+                            self._wait_for_rate_limit(retry_resp, attempt)
+                            continue
+                        return False, f"Captcha error: {retry_resp.status_code}"
                     return False, f"Code: {msg_resp.status_code}"
 
                 return False, "Rate Limit (message)"
