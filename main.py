@@ -242,7 +242,10 @@ class MassDMApp(ctk.CTk):
         self.log_queue.put({"timestamp": timestamp, "message": message, "level": level})
 
     def log_error(self, message):
-        self.add_log(f"Error: {message}")
+        self.add_log(f"[Error] {message}")
+
+    def log_warning(self, message):
+        self.add_log(f"[Warn] {message}")
 
     def _get_setting_bool(self, key, default=True):
         value = self.db.get_setting(key, None)
@@ -1003,10 +1006,11 @@ class MassDMApp(ctk.CTk):
         return entry["level"] == "Error"
 
     def _get_log_level(self, message):
-        normalized = message.strip().casefold()
-        if "error" in normalized or normalized.startswith("[!]"):
+        normalized = message.strip()
+        lowered = normalized.casefold()
+        if lowered.startswith("[error]") or lowered.startswith("error:") or lowered.startswith("[!]"):
             return "Error"
-        if normalized.startswith("warning"):
+        if lowered.startswith("[warn]") or lowered.startswith("[warning]") or lowered.startswith("warning:"):
             return "Warning"
         return "Info"
 
