@@ -529,11 +529,11 @@ class MassDMApp(ctk.CTk):
         # 3. SEKCJA CAPTCHA
         self.captcha_frame = ctk.CTkFrame(parent)
         self.captcha_frame.pack(fill="x", pady=10)
-        ctk.CTkLabel(self.captcha_frame, text="Captcha Solver (CapSolver / 2Captcha)", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=3, pady=10)
+        ctk.CTkLabel(self.captcha_frame, text="Captcha Solver (CapSolver / 2Captcha / Anti-Captcha)", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=3, pady=10)
         self.captcha_provider_var = ctk.StringVar(value="capsolver")
         self.captcha_provider = ctk.CTkOptionMenu(
             self.captcha_frame,
-            values=["capsolver", "2captcha"],
+            values=["capsolver", "2captcha", "anticaptcha"],
             variable=self.captcha_provider_var,
             command=self.on_captcha_provider_change,
         )
