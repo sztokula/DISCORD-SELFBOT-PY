@@ -400,6 +400,9 @@ class MassDMApp(ctk.CTk):
         self.add_log("[Accounts] Zresetowano liczniki dzienne.")
         self.refresh_accounts_overview()
 
+    def _extract_user_ids(self, value):
+        return re.findall(r"\d{17,20}", value)
+
     def _parse_user_ids(self, raw_text):
         ids = []
         invalid = []
@@ -407,11 +410,13 @@ class MassDMApp(ctk.CTk):
             value = line.strip()
             if not value:
                 continue
-            if re.match(r"^\d{17,20}$", value):
-                ids.append(value)
+            matches = self._extract_user_ids(value)
+            if matches:
+                ids.extend(matches)
             else:
                 invalid.append(value)
-        return ids, invalid
+        unique_ids = list(dict.fromkeys(ids))
+        return unique_ids, invalid
 
     def _parse_user_ids_from_file(self, file_path):
         ids = []
@@ -422,14 +427,16 @@ class MassDMApp(ctk.CTk):
                     value = line.strip()
                     if not value:
                         continue
-                    if re.match(r"^\d{17,20}$", value):
-                        ids.append(value)
+                    matches = self._extract_user_ids(value)
+                    if matches:
+                        ids.extend(matches)
                     else:
                         invalid.append(value)
         except OSError as exc:
             self.log_error(f"Nie można odczytać pliku: {exc}")
             return [], []
-        return ids, invalid
+        unique_ids = list(dict.fromkeys(ids))
+        return unique_ids, invalid
 
     def add_targets_from_input(self):
         raw = self.target_input.get("1.0", "end")
