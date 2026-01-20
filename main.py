@@ -30,7 +30,8 @@ class MassDMApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.db = DatabaseManager()
+        self.log_queue = queue.Queue()
+        self.db = DatabaseManager(log_callback=self.add_log)
         self.db.reset_daily_counters()
         self.module_vars = {
             "dm": ctk.BooleanVar(value=self._get_setting_bool("module_dm", True)),
@@ -42,7 +43,7 @@ class MassDMApp(ctk.CTk):
         self.export_banned_tokens_plaintext_var = ctk.BooleanVar(
             value=self._get_setting_bool("export_banned_tokens_plaintext", False)
         )
-        self.log_queue = queue.Queue()
+        
         self.metrics = HealthMetrics()
         self.worker = DiscordWorker(self.db, self.add_log, self.metrics)
         self.scraper = DiscordScraper(self.db, self.add_log, self.metrics)
@@ -145,38 +146,16 @@ class MassDMApp(ctk.CTk):
         self.workflow_refresh_btn.grid(row=1, column=1, padx=10, pady=5, sticky="e")
         self.workflow_next_btn = ctk.CTkButton(self.workflow_frame, text="Dalej", command=self.advance_workflow)
         self.workflow_next_btn.grid(row=2, column=1, padx=10, pady=5, sticky="e")
-
-        self.workflow_actions_frame = ctk.CTkFrame(self.main_container)
-        self.workflow_actions_frame.pack(fill="x", pady=(0, 10))
-        for col in range(3):
-            self.workflow_actions_frame.grid_columnconfigure(col, weight=1)
-        ctk.CTkLabel(self.workflow_actions_frame, text="Actions", font=ctk.CTkFont(size=16, weight="bold")).grid(
-            row=0, column=0, columnspan=3, pady=10
-        )
-        self.join_action_btn = ctk.CTkButton(
-            self.workflow_actions_frame,
+        self.workflow_action_btn = ctk.CTkButton(
+            self.workflow_frame,
             text="DOLACZ",
             fg_color="#f39c12",
             hover_color="#d35400",
             command=self._handle_join_action,
         )
-        self.join_action_btn.grid(row=1, column=0, padx=10, pady=5, sticky="w")
-        self.scrape_action_btn = ctk.CTkButton(
-            self.workflow_actions_frame,
-            text="SCRAP MEMBERS",
-            fg_color="#16a085",
-            command=self._handle_scrape_action,
-        )
-        self.scrape_action_btn.grid(row=1, column=1, padx=10, pady=5, sticky="w")
-        self.dm_action_btn = ctk.CTkButton(
-            self.workflow_actions_frame,
-            text="Wyslij DM",
-            fg_color="#2ecc71",
-            command=self._handle_dm_action,
-        )
-        self.dm_action_btn.grid(row=1, column=2, padx=10, pady=5, sticky="w")
-        self.scrape_action_btn.grid_remove()
-        self.dm_action_btn.grid_remove()
+        self.workflow_action_btn.grid(row=2, column=1, padx=10, pady=5, sticky="e")
+        self.workflow_action_btn.grid_remove()
+
         self._set_workflow_stage("setup")
 
         # 1. SEKCJA WIADOMOĹšCI (przeniesiona do ustawien)
@@ -312,24 +291,38 @@ class MassDMApp(ctk.CTk):
         return value
 
     def _count_templates(self):
-        if not hasattr(self, "msg_input"):
-            return 0
-        raw = self.msg_input.get("1.0", "end").strip()
+        raw = self._get_message_templates_raw()
         if not raw:
             return 0
         templates = [tpl.strip() for tpl in re.split(r"\n-{3,}\n", raw) if tpl.strip()]
         return len(templates)
 
+    def _get_message_templates_raw(self):
+        if hasattr(self, "msg_input") and self.msg_input.winfo_exists():
+            return self.msg_input.get("1.0", "end").strip()
+        return self.db.get_setting("message_templates", "").strip()
+
+    def save_message_templates(self):
+        raw = self._get_message_templates_raw()
+        if not raw:
+            self.db.set_setting("message_templates", None)
+            self.add_log("[Templates] WyczyĹ›ciĹ‚em szablony wiadomoĹ›ci.")
+            self.refresh_workflow_status()
+            return
+        self.db.set_setting("message_templates", raw)
+        self.add_log("[Templates] Zapisano szablony wiadomoĹ›ci.")
+        self.refresh_workflow_status()
+
+    def _load_message_templates(self):
+        if not hasattr(self, "msg_input"):
+            return
+        stored = self.db.get_setting("message_templates", "")
+        self.msg_input.delete("1.0", "end")
+        if stored:
+            self.msg_input.insert("1.0", stored)
+
     def _count_invites(self):
-        if not hasattr(self, "invite_input"):
-            return 0
-        raw_text = self.invite_input.get("1.0", "end")
-        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-        count = 0
-        for line in lines:
-            if self.normalize_invite(line):
-                count += 1
-        return count
+        return len(self._get_saved_invites())
 
     def refresh_workflow_status(self):
         accounts = self.db.get_accounts_overview()
@@ -357,35 +350,48 @@ class MassDMApp(ctk.CTk):
         scraper_enabled = self.module_vars["scraper"].get()
         dm_enabled = self.module_vars["dm"].get()
         if stage == "setup":
-            self.join_action_btn.configure(state="disabled")
-            self.scrape_action_btn.grid_remove()
-            self.dm_action_btn.grid_remove()
+            self.workflow_next_btn.grid()
+            self.workflow_action_btn.grid_remove()
             return
         if stage == "join":
-            self.join_action_btn.configure(state="normal" if joiner_enabled else "disabled")
-            self.scrape_action_btn.grid_remove()
-            self.dm_action_btn.grid_remove()
+            self.workflow_next_btn.grid_remove()
+            self.workflow_action_btn.configure(
+                text="DOLACZ",
+                fg_color="#f39c12",
+                hover_color="#d35400",
+                command=self._handle_join_action,
+                state="normal" if joiner_enabled else "disabled",
+            )
+            self.workflow_action_btn.grid()
             return
         if stage == "scrape":
-            self.join_action_btn.configure(state="disabled")
-            self.scrape_action_btn.grid()
-            self.scrape_action_btn.configure(state="normal" if scraper_enabled else "disabled")
-            self.dm_action_btn.grid_remove()
+            self.workflow_next_btn.grid_remove()
+            self.workflow_action_btn.configure(
+                text="SCRAP MEMBERS",
+                fg_color="#16a085",
+                command=self._handle_scrape_action,
+                state="normal" if scraper_enabled else "disabled",
+            )
+            self.workflow_action_btn.grid()
             return
         if stage == "dm":
-            self.join_action_btn.configure(state="disabled")
-            self.scrape_action_btn.configure(state="disabled")
-            self.dm_action_btn.grid()
-            self.dm_action_btn.configure(state="normal" if dm_enabled else "disabled")
+            self.workflow_next_btn.grid_remove()
+            self.workflow_action_btn.configure(
+                text="Wyslij DM",
+                fg_color="#2ecc71",
+                command=self._handle_dm_action,
+                state="normal" if dm_enabled else "disabled",
+            )
+            self.workflow_action_btn.grid()
 
     def _handle_join_action(self):
-        if not hasattr(self, "invite_input"):
-            self.log_error("OtwĂłrz ustawienia i wprowadĹş zaproszenia do serwerĂłw.")
+        if not self._get_saved_invites():
+            self.log_error("Brak zapisanych zaproszeĹ„. OtwĂłrz ustawienia i zapisz listÄ™ serwerĂłw.")
             return
-        self.join_action_btn.configure(state="disabled")
+        self.workflow_action_btn.configure(state="disabled")
         started = self.start_joining(on_complete=self._on_join_complete)
         if not started:
-            self.join_action_btn.configure(state="normal")
+            self.workflow_action_btn.configure(state="normal")
 
     def _on_join_complete(self, success):
         def _update():
@@ -393,14 +399,14 @@ class MassDMApp(ctk.CTk):
                 self._set_workflow_stage("scrape")
             else:
                 self.log_error("DoĹ‚Ä…czanie nie powiodĹ‚o siÄ™ lub przerwane.")
-                self.join_action_btn.configure(state="normal")
+                self.workflow_action_btn.configure(state="normal")
         self.after(0, _update)
 
     def _handle_scrape_action(self):
-        self.scrape_action_btn.configure(state="disabled")
+        self.workflow_action_btn.configure(state="disabled")
         started = self.start_guild_scraping(on_complete=self._on_scrape_complete)
         if not started:
-            self.scrape_action_btn.configure(state="normal")
+            self.workflow_action_btn.configure(state="normal")
 
     def _on_scrape_complete(self, success):
         def _update():
@@ -408,7 +414,7 @@ class MassDMApp(ctk.CTk):
                 self._set_workflow_stage("dm")
             else:
                 self.log_error("Scrapowanie nie powiodĹ‚o siÄ™ lub przerwane.")
-                self.scrape_action_btn.configure(state="normal")
+                self.workflow_action_btn.configure(state="normal")
         self.after(0, _update)
 
     def _handle_dm_action(self):
@@ -692,12 +698,22 @@ class MassDMApp(ctk.CTk):
         invite = invite.strip()
         if not invite:
             return None
-        url_match = re.match(
-            r"^(?:https?://)?(?:www\.)?(?:discord\.gg|discord(?:app)?\.com/invite)/([A-Za-z0-9-]+)$",
-            invite,
-        )
-        if url_match:
-            return url_match.group(1)
+        if invite.startswith("<") and invite.endswith(">"):
+            invite = invite[1:-1].strip()
+        parsed = urlparse(invite if "://" in invite else f"https://{invite}")
+        host = (parsed.hostname or "").lower()
+        path = parsed.path.strip("/")
+        code = None
+        if host in {"discord.gg", "www.discord.gg"}:
+            if path:
+                code = path.split("/")[0]
+        elif host in {"discord.com", "www.discord.com", "discordapp.com", "www.discordapp.com"}:
+            if path.startswith("invite/"):
+                code = path.split("/", 1)[1]
+                if code:
+                    code = code.split("/")[0]
+        if code and re.match(r"^[A-Za-z0-9-]{2,}$", code):
+            return code
         if re.match(r"^[A-Za-z0-9-]{2,}$", invite):
             return invite
         return None
@@ -931,8 +947,11 @@ class MassDMApp(ctk.CTk):
         self.join_limit_input.delete(0, "end")
         self.join_limit_input.insert(0, "5")
 
-    def _get_invite_list(self):
-        raw_text = self.invite_input.get("1.0", "end")
+    def _get_invite_list(self, raw_text=None, log_invalid=True):
+        if raw_text is None:
+            if not hasattr(self, "invite_input"):
+                return []
+            raw_text = self.invite_input.get("1.0", "end")
         lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
         normalized = []
         invalid = []
@@ -942,17 +961,46 @@ class MassDMApp(ctk.CTk):
                 normalized.append(code)
             else:
                 invalid.append(line)
-        if invalid:
+        if invalid and log_invalid:
             self.log_error(f"Niepoprawne zaproszenia (pomijam): {', '.join(invalid)}")
         return normalized
+
+    def _get_saved_invites(self):
+        raw_text = self.db.get_setting("join_invites", "")
+        return self._get_invite_list(raw_text, log_invalid=False)
+
+    def save_invite_settings(self):
+        if not hasattr(self, "invite_input"):
+            return
+        raw_text = self.invite_input.get("1.0", "end").strip()
+        if not raw_text:
+            self.db.set_setting("join_invites", None)
+            self.add_log("[Joiner] WyczyĹ›ciĹ‚em listÄ™ zaproszeĹ„.")
+            self.refresh_workflow_status()
+            return
+        invites = self._get_invite_list(raw_text, log_invalid=True)
+        if not invites:
+            self.log_error("Brak poprawnych zaproszeĹ„ do zapisania.")
+            return
+        self.db.set_setting("join_invites", "\n".join(invites))
+        self.add_log(f"[Joiner] Zapisano {len(invites)} zaproszeĹ„.")
+        self.refresh_workflow_status()
+
+    def _load_invite_settings(self):
+        if not hasattr(self, "invite_input"):
+            return
+        stored = self.db.get_setting("join_invites", "")
+        self.invite_input.delete("1.0", "end")
+        if stored:
+            self.invite_input.insert("1.0", stored)
 
     def start_joining(self, on_complete=None):
         if not self.module_vars["joiner"].get():
             self.log_error("ModuĹ‚ Joiner jest wyĹ‚Ä…czony.")
             return False
-        invites = self._get_invite_list()
+        invites = self._get_saved_invites()
         if not invites:
-            self.log_error("Brak poprawnych zaproszeĹ„.")
+            self.log_error("Brak zapisanych zaproszeĹ„. OtwĂłrz ustawienia i zapisz listÄ™ serwerĂłw.")
             return False
         join_delay = self._parse_delay_range(
             self.join_delay_min_input,
@@ -1051,10 +1099,7 @@ class MassDMApp(ctk.CTk):
         if not self.module_vars["dm"].get():
             self.log_error("ModuĹ‚ DM jest wyĹ‚Ä…czony.")
             return
-        if not hasattr(self, "msg_input"):
-            self.log_error("OtwĂłrz ustawienia i ustaw szablony wiadomoĹ›ci.")
-            return
-        raw = self.msg_input.get("1.0", "end").strip()
+        raw = self._get_message_templates_raw()
         if not raw:
             self.log_error("Pusta wiadomoĹ›Ä‡.")
             return
@@ -1302,8 +1347,8 @@ class MassDMApp(ctk.CTk):
             self.start_btn.configure(state="normal" if dm_enabled else "disabled")
         if hasattr(self, "friend_request_toggle"):
             self.friend_request_toggle.configure(state="normal" if dm_enabled else "disabled")
-        if hasattr(self, "join_btn"):
-            self.join_btn.configure(state="normal" if joiner_enabled else "disabled")
+        if hasattr(self, "invite_save_btn"):
+            self.invite_save_btn.configure(state="normal")
         if hasattr(self, "scrape_btn"):
             self.scrape_btn.configure(state="normal" if scraper_enabled else "disabled")
         if hasattr(self, "scrape_guild_btn"):
@@ -1342,6 +1387,7 @@ class MassDMApp(ctk.CTk):
     def close_settings_window(self):
         if self.settings_window and self.settings_window.winfo_exists():
             self.save_delay_settings()
+            self.save_message_templates()
             self.settings_window.destroy()
             self.refresh_workflow_status()
         self.settings_window = None
@@ -1486,6 +1532,13 @@ class MassDMApp(ctk.CTk):
             variable=self.friend_request_var,
         )
         self.friend_request_toggle.pack(anchor="w", padx=20, pady=(0, 10))
+        self.templates_save_btn = ctk.CTkButton(
+            self.msg_frame,
+            text="Save Templates",
+            command=self.save_message_templates,
+        )
+        self.templates_save_btn.pack(anchor="w", padx=20, pady=(0, 10))
+        self._load_message_templates()
 
         self.delay_frame = ctk.CTkFrame(parent)
         self.delay_frame.pack(fill="x", pady=10)
@@ -1554,8 +1607,14 @@ class MassDMApp(ctk.CTk):
         self.invite_input = ctk.CTkTextbox(self.joiner_frame, height=80, width=350)
         self.invite_input.grid(row=1, column=0, padx=10, pady=5)
         self.invite_input.insert("1.0", "Invite link/code per line (e.g. discord.gg/xyz)\n")
-        self.join_btn = ctk.CTkButton(self.joiner_frame, text="Join Server", fg_color="#f39c12", hover_color="#d35400", command=self.start_joining)
-        self.join_btn.grid(row=1, column=1, padx=10, pady=5)
+        self.invite_save_btn = ctk.CTkButton(
+            self.joiner_frame,
+            text="Save Servers",
+            fg_color="#3498db",
+            command=self.save_invite_settings,
+        )
+        self.invite_save_btn.grid(row=1, column=1, padx=10, pady=5)
+        self._load_invite_settings()
 
         # 3. SEKCJA CAPTCHA
         self.captcha_frame = ctk.CTkFrame(parent)

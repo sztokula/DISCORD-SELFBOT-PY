@@ -9,9 +9,10 @@ from pathlib import Path
 from cryptography.fernet import Fernet, InvalidToken
 
 class DatabaseManager:
-    def __init__(self, db_name="farm_tool.db"):
+    def __init__(self, db_name="farm_tool.db", log_callback=None):
         self.db_name = db_name
         self.write_lock = threading.Lock()
+        self.log = log_callback
         self.fernet = self._init_fernet()
         self.init_db()
         self.sensitive_settings = {
@@ -84,7 +85,9 @@ class DatabaseManager:
         try:
             return self.fernet.decrypt(encrypted.encode("utf-8")).decode("utf-8")
         except InvalidToken:
-            raise RuntimeError("NieprawidĹ‚owy klucz szyfrowania tokenĂłw.")
+            if self.log:
+                self.log("[Accounts] NieprawidĹ‚owy klucz szyfrowania tokenĂłw.")
+            return None
 
     def init_db(self):
         with self.write_lock:
@@ -212,7 +215,12 @@ class DatabaseManager:
         accounts = []
         for acc in cursor.fetchall():
             acc_list = list(acc)
-            acc_list[2] = self._decrypt_token(acc_list[2])
+            decrypted = self._decrypt_token(acc_list[2])
+            if not decrypted:
+                if self.log:
+                    self.log(f"[Accounts] Pomijam konto {acc_list[0]} - nieprawidĹ‚owy klucz szyfrowania.")
+                continue
+            acc_list[2] = decrypted
             base_limit = acc_list[5]
             created_at = acc_list[11]
             acc_list[5] = self._get_effective_daily_limit(base_limit, created_at)
@@ -229,7 +237,10 @@ class DatabaseManager:
         conn.close()
         if not row or not row[0]:
             return None
-        return self._decrypt_token(row[0])
+        decrypted = self._decrypt_token(row[0])
+        if not decrypted and self.log:
+            self.log(f"[Accounts] NieprawidĹ‚owy klucz szyfrowania dla konta {account_id}.")
+        return decrypted
 
     def reset_daily_counters(self, reference_datetime=None):
         if reference_datetime is None:
