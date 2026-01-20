@@ -73,6 +73,8 @@ class MassDMApp(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
         self.settings_window = None
         self._settings_scroll_fix_bound = False
+        self._settings_scrollbar_original = None
+        self._settings_scrollbar_widget = None
         self.version_status_var = ctk.StringVar(value="Last check: --")
         self.update_status_var = ctk.StringVar(value="Update: --")
         self.update_info = None
@@ -1470,6 +1472,15 @@ class MassDMApp(ctk.CTk):
             return
         self.bind_all("<MouseWheel>", self._settings_scroll_fix, add="+")
         self._settings_scroll_fix_bound = True
+        container = getattr(self, "settings_container", None)
+        if not container:
+            return
+        scrollbar = getattr(container, "_scrollbar", None)
+        if not scrollbar:
+            return
+        self._settings_scrollbar_original = scrollbar.cget("command")
+        self._settings_scrollbar_widget = scrollbar
+        scrollbar.configure(command=self._settings_scrollbar_command)
 
     def _settings_scroll_fix(self, event):
         if not (self.settings_window and self.settings_window.winfo_exists()):
@@ -1483,6 +1494,21 @@ class MassDMApp(ctk.CTk):
         try:
             if container.check_if_master_is_canvas(event.widget):
                 canvas.update_idletasks()
+                canvas.configure(scrollregion=canvas.bbox("all"))
+        except Exception:
+            return
+
+    def _settings_scrollbar_command(self, *args):
+        original = self._settings_scrollbar_original
+        if original:
+            original(*args)
+        container = getattr(self, "settings_container", None)
+        canvas = getattr(container, "_parent_canvas", None) if container else None
+        if not canvas:
+            return
+        try:
+            canvas.update_idletasks()
+            canvas.configure(scrollregion=canvas.bbox("all"))
         except Exception:
             return
 
