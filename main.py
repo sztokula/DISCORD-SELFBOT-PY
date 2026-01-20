@@ -314,6 +314,36 @@ class MassDMApp(ctk.CTk):
         except (TypeError, ValueError):
             return default
 
+    def _delay_values_in_hours(self):
+        return self._get_setting_bool("delay_units_hours", False)
+
+    def _convert_delay_value(self, value, assume_seconds=False):
+        if value is None:
+            return None
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+        if self._delay_values_in_hours():
+            return value
+        if assume_seconds:
+            return value / 3600.0
+        return value
+
+    def _seconds_to_hours(self, seconds):
+        return max(0.0, float(seconds)) / 3600.0
+
+    def _hours_to_seconds(self, hours):
+        return max(0.0, float(hours)) * 3600.0
+
+    def _format_hours_value(self, value):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return ""
+        text = f"{value:.4f}".rstrip("0").rstrip(".")
+        return text or "0"
+
     def _parse_delay_range(self, min_input, max_input, label, cast_type=int, min_value=0.0):
         min_raw = min_input.get().strip()
         max_raw = max_input.get().strip()
@@ -358,10 +388,14 @@ class MassDMApp(ctk.CTk):
         self._set_input_valid(input_widget, True)
         return value
 
-    def _parse_min_value_from_settings(self, key, label, cast_type=int, min_value=0.0):
+    def _parse_min_value_from_settings(self, key, label, cast_type=int, min_value=0.0, assume_seconds=False):
         value = self._get_setting_number(key, None)
         if value is None:
             self.log_error(f"{label} is not set. Open settings.")
+            return None
+        value = self._convert_delay_value(value, assume_seconds=assume_seconds)
+        if value is None:
+            self.log_error(f"{label} has an invalid format.")
             return None
         try:
             value = cast_type(value)
@@ -373,11 +407,24 @@ class MassDMApp(ctk.CTk):
             return None
         return value
 
-    def _parse_delay_range_from_settings(self, min_key, max_key, label, cast_type=int, min_value=0.0):
+    def _parse_delay_range_from_settings(
+        self,
+        min_key,
+        max_key,
+        label,
+        cast_type=int,
+        min_value=0.0,
+        assume_seconds=False,
+    ):
         min_val = self._get_setting_number(min_key, None)
         max_val = self._get_setting_number(max_key, None)
         if min_val is None or max_val is None:
             self.log_error(f"{label} is not set. Open settings.")
+            return None
+        min_val = self._convert_delay_value(min_val, assume_seconds=assume_seconds)
+        max_val = self._convert_delay_value(max_val, assume_seconds=assume_seconds)
+        if min_val is None or max_val is None:
+            self.log_error(f"{label} has an invalid format.")
             return None
         try:
             min_val = cast_type(min_val)
@@ -1466,23 +1513,27 @@ class MassDMApp(ctk.CTk):
             join_delay = self._parse_delay_range(
                 self.join_delay_min_input,
                 self.join_delay_max_input,
-                "Join delay",
-                cast_type=int,
-                min_value=0,
+                "Join delay (h)",
+                cast_type=float,
+                min_value=0.0,
             )
         else:
             join_delay = self._parse_delay_range_from_settings(
                 "join_delay_min",
                 "join_delay_max",
-                "Join delay",
-                cast_type=int,
-                min_value=0,
+                "Join delay (h)",
+                cast_type=float,
+                min_value=0.0,
+                assume_seconds=True,
             )
         if not join_delay:
             return False
-        join_delay_min, join_delay_max = join_delay
-        self.db.set_setting("join_delay_min", str(join_delay_min))
-        self.db.set_setting("join_delay_max", str(join_delay_max))
+        join_delay_min_h, join_delay_max_h = join_delay
+        self.db.set_setting("join_delay_min", str(join_delay_min_h))
+        self.db.set_setting("join_delay_max", str(join_delay_max_h))
+        self._set_setting_bool("delay_units_hours", True)
+        join_delay_min = int(round(self._hours_to_seconds(join_delay_min_h)))
+        join_delay_max = int(round(self._hours_to_seconds(join_delay_max_h)))
         thread = threading.Thread(
             target=self.joiner.run_mass_join,
             args=(
@@ -1651,17 +1702,18 @@ class MassDMApp(ctk.CTk):
             dm_delay = self._parse_delay_range(
                 self.dm_delay_min_input,
                 self.dm_delay_max_input,
-                "DM delay",
-                cast_type=int,
-                min_value=0,
+                "DM delay (h)",
+                cast_type=float,
+                min_value=0.0,
             )
         else:
             dm_delay = self._parse_delay_range_from_settings(
                 "dm_delay_min",
                 "dm_delay_max",
-                "DM delay",
-                cast_type=int,
-                min_value=0,
+                "DM delay (h)",
+                cast_type=float,
+                min_value=0.0,
+                assume_seconds=True,
             )
         if not dm_delay:
             return
@@ -1669,60 +1721,70 @@ class MassDMApp(ctk.CTk):
             friend_delay = self._parse_delay_range(
                 self.friend_delay_min_input,
                 self.friend_delay_max_input,
-                "Friend request delay",
-                cast_type=int,
-                min_value=0,
+                "Friend request delay (h)",
+                cast_type=float,
+                min_value=0.0,
             )
         else:
             friend_delay = self._parse_delay_range_from_settings(
                 "friend_delay_min",
                 "friend_delay_max",
-                "Friend request delay",
-                cast_type=int,
-                min_value=0,
+                "Friend request delay (h)",
+                cast_type=float,
+                min_value=0.0,
+                assume_seconds=True,
             )
         if not friend_delay:
             return
         if hasattr(self, "account_min_interval_input") and self.account_min_interval_input.winfo_exists():
             account_min_interval = self._parse_min_value(
                 self.account_min_interval_input,
-                "Account min interval (s)",
-                cast_type=int,
-                min_value=0,
+                "Account min interval (h)",
+                cast_type=float,
+                min_value=0.0,
             )
         else:
             account_min_interval = self._parse_min_value_from_settings(
                 "account_min_interval",
-                "Account min interval (s)",
-                cast_type=int,
-                min_value=0,
+                "Account min interval (h)",
+                cast_type=float,
+                min_value=0.0,
+                assume_seconds=True,
             )
         if account_min_interval is None:
             return
         if hasattr(self, "target_min_interval_input") and self.target_min_interval_input.winfo_exists():
             target_min_interval = self._parse_min_value(
                 self.target_min_interval_input,
-                "Target min interval (s)",
-                cast_type=int,
-                min_value=0,
+                "Target min interval (h)",
+                cast_type=float,
+                min_value=0.0,
             )
         else:
             target_min_interval = self._parse_min_value_from_settings(
                 "target_min_interval",
-                "Target min interval (s)",
-                cast_type=int,
-                min_value=0,
+                "Target min interval (h)",
+                cast_type=float,
+                min_value=0.0,
+                assume_seconds=True,
             )
         if target_min_interval is None:
             return
-        dm_delay_min, dm_delay_max = dm_delay
-        friend_delay_min, friend_delay_max = friend_delay
-        self.db.set_setting("dm_delay_min", str(dm_delay_min))
-        self.db.set_setting("dm_delay_max", str(dm_delay_max))
-        self.db.set_setting("friend_delay_min", str(friend_delay_min))
-        self.db.set_setting("friend_delay_max", str(friend_delay_max))
+        dm_delay_min_h, dm_delay_max_h = dm_delay
+        friend_delay_min_h, friend_delay_max_h = friend_delay
+        self.db.set_setting("dm_delay_min", str(dm_delay_min_h))
+        self.db.set_setting("dm_delay_max", str(dm_delay_max_h))
+        self.db.set_setting("friend_delay_min", str(friend_delay_min_h))
+        self.db.set_setting("friend_delay_max", str(friend_delay_max_h))
         self.db.set_setting("account_min_interval", str(account_min_interval))
         self.db.set_setting("target_min_interval", str(target_min_interval))
+        self._set_setting_bool("delay_units_hours", True)
+        dm_delay_min = int(round(self._hours_to_seconds(dm_delay_min_h)))
+        dm_delay_max = int(round(self._hours_to_seconds(dm_delay_max_h)))
+        friend_delay_min = int(round(self._hours_to_seconds(friend_delay_min_h)))
+        friend_delay_max = int(round(self._hours_to_seconds(friend_delay_max_h)))
+        account_min_interval = int(round(self._hours_to_seconds(account_min_interval)))
+        target_min_interval = int(round(self._hours_to_seconds(target_min_interval)))
         use_friend_req = self.friend_request_var.get()
         dry_run = self.dry_run_var.get()
         if dry_run:
@@ -1886,8 +1948,12 @@ class MassDMApp(ctk.CTk):
         sent = counts.get("Sent", 0)
         failed = counts.get("Failed", 0)
         dry_run = counts.get("Dry-Run", 0)
+        retrying = counts.get("Retry", 0)
         self.target_summary_label.configure(
-            text=f"Targets: {total} | Pending: {pending} | Sent: {sent} | Failed: {failed} | Dry-Run: {dry_run}"
+            text=(
+                f"Targets: {total} | Pending: {pending} | Retry: {retrying} | "
+                f"Sent: {sent} | Failed: {failed} | Dry-Run: {dry_run}"
+            )
         )
         targets = self.db.get_targets(limit=50)
         self.target_overview_box.delete("1.0", "end")
@@ -2073,27 +2139,27 @@ class MassDMApp(ctk.CTk):
         dm_delay = self._parse_delay_range(
             self.dm_delay_min_input,
             self.dm_delay_max_input,
-            "DM delay",
-            cast_type=int,
-            min_value=0,
+            "DM delay (h)",
+            cast_type=float,
+            min_value=0.0,
         )
         if not dm_delay:
             return
         join_delay = self._parse_delay_range(
             self.join_delay_min_input,
             self.join_delay_max_input,
-            "Join delay",
-            cast_type=int,
-            min_value=0,
+            "Join delay (h)",
+            cast_type=float,
+            min_value=0.0,
         )
         if not join_delay:
             return
         friend_delay = self._parse_delay_range(
             self.friend_delay_min_input,
             self.friend_delay_max_input,
-            "Friend request delay",
-            cast_type=int,
-            min_value=0,
+            "Friend request delay (h)",
+            cast_type=float,
+            min_value=0.0,
         )
         if not friend_delay:
             return
@@ -2117,34 +2183,35 @@ class MassDMApp(ctk.CTk):
             return
         account_interval = self._parse_min_value(
             self.account_min_interval_input,
-            "Account min interval (s)",
-            cast_type=int,
-            min_value=0,
+            "Account min interval (h)",
+            cast_type=float,
+            min_value=0.0,
         )
         if account_interval is None:
             return
         target_interval = self._parse_min_value(
             self.target_min_interval_input,
-            "Target min interval (s)",
-            cast_type=int,
-            min_value=0,
+            "Target min interval (h)",
+            cast_type=float,
+            min_value=0.0,
         )
         if target_interval is None:
             return
-        dm_delay_min, dm_delay_max = dm_delay
-        join_delay_min, join_delay_max = join_delay
-        friend_delay_min, friend_delay_max = friend_delay
+        dm_delay_min_h, dm_delay_max_h = dm_delay
+        join_delay_min_h, join_delay_max_h = join_delay
+        friend_delay_min_h, friend_delay_max_h = friend_delay
         status_delay_min, status_delay_max = status_delay
-        self.db.set_setting("dm_delay_min", str(dm_delay_min))
-        self.db.set_setting("dm_delay_max", str(dm_delay_max))
-        self.db.set_setting("join_delay_min", str(join_delay_min))
-        self.db.set_setting("join_delay_max", str(join_delay_max))
-        self.db.set_setting("friend_delay_min", str(friend_delay_min))
-        self.db.set_setting("friend_delay_max", str(friend_delay_max))
+        self.db.set_setting("dm_delay_min", str(dm_delay_min_h))
+        self.db.set_setting("dm_delay_max", str(dm_delay_max_h))
+        self.db.set_setting("join_delay_min", str(join_delay_min_h))
+        self.db.set_setting("join_delay_max", str(join_delay_max_h))
+        self.db.set_setting("friend_delay_min", str(friend_delay_min_h))
+        self.db.set_setting("friend_delay_max", str(friend_delay_max_h))
         self.db.set_setting("status_delay_min_hours", str(status_delay_min))
         self.db.set_setting("status_delay_max_hours", str(status_delay_max))
         self.db.set_setting("account_min_interval", str(account_interval))
         self.db.set_setting("target_min_interval", str(target_interval))
+        self._set_setting_bool("delay_units_hours", True)
         self.add_log("[Settings] Zapisano ustawienia delay.")
 
     def _build_settings_sections(self, parent):
@@ -2326,62 +2393,106 @@ class MassDMApp(ctk.CTk):
         self.delay_frame = ctk.CTkFrame(parent)
         self.delay_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.delay_frame, text="Delay Settings", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=4, pady=10)
+        ctk.CTkLabel(self.delay_frame, text="Min", text_color="#8a8a8a").grid(row=1, column=1, padx=10, pady=(0, 5), sticky="w")
+        ctk.CTkLabel(self.delay_frame, text="Max", text_color="#8a8a8a").grid(row=1, column=2, padx=10, pady=(0, 5), sticky="w")
 
-        dm_delay_min = int(self._get_setting_number("dm_delay_min", 5))
-        dm_delay_max = int(self._get_setting_number("dm_delay_max", 10))
-        join_delay_min = int(self._get_setting_number("join_delay_min", 10))
-        join_delay_max = int(self._get_setting_number("join_delay_max", 30))
-        friend_delay_min = int(self._get_setting_number("friend_delay_min", 2))
-        friend_delay_max = int(self._get_setting_number("friend_delay_max", 5))
-        status_delay_min = self._get_setting_number("status_delay_min_hours", 3.0)
-        status_delay_max = self._get_setting_number("status_delay_max_hours", 3.0)
-        account_min_interval = int(self._get_setting_number("account_min_interval", 0))
-        target_min_interval = int(self._get_setting_number("target_min_interval", 0))
+        dm_delay_min = self._convert_delay_value(
+            self._get_setting_number("dm_delay_min", None),
+            assume_seconds=True,
+        )
+        if dm_delay_min is None:
+            dm_delay_min = self._seconds_to_hours(5)
+        dm_delay_max = self._convert_delay_value(
+            self._get_setting_number("dm_delay_max", None),
+            assume_seconds=True,
+        )
+        if dm_delay_max is None:
+            dm_delay_max = self._seconds_to_hours(10)
+        join_delay_min = self._convert_delay_value(
+            self._get_setting_number("join_delay_min", None),
+            assume_seconds=True,
+        )
+        if join_delay_min is None:
+            join_delay_min = self._seconds_to_hours(10)
+        join_delay_max = self._convert_delay_value(
+            self._get_setting_number("join_delay_max", None),
+            assume_seconds=True,
+        )
+        if join_delay_max is None:
+            join_delay_max = self._seconds_to_hours(30)
+        friend_delay_min = self._convert_delay_value(
+            self._get_setting_number("friend_delay_min", None),
+            assume_seconds=True,
+        )
+        if friend_delay_min is None:
+            friend_delay_min = self._seconds_to_hours(2)
+        friend_delay_max = self._convert_delay_value(
+            self._get_setting_number("friend_delay_max", None),
+            assume_seconds=True,
+        )
+        if friend_delay_max is None:
+            friend_delay_max = self._seconds_to_hours(5)
+        status_delay_min = self._convert_delay_value(
+            self._get_setting_number("status_delay_min_hours", 3.0),
+            assume_seconds=False,
+        )
+        status_delay_max = self._convert_delay_value(
+            self._get_setting_number("status_delay_max_hours", 3.0),
+            assume_seconds=False,
+        )
+        account_min_interval = self._convert_delay_value(
+            self._get_setting_number("account_min_interval", 0),
+            assume_seconds=True,
+        )
+        target_min_interval = self._convert_delay_value(
+            self._get_setting_number("target_min_interval", 0),
+            assume_seconds=True,
+        )
 
-        ctk.CTkLabel(self.delay_frame, text="DM delay (s) min/max").grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.delay_frame, text="DM delay (h) min/max").grid(row=2, column=0, padx=10, pady=5, sticky="w")
         self.dm_delay_min_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.dm_delay_min_input.grid(row=1, column=1, padx=10, pady=5, sticky="w")
-        self.dm_delay_min_input.insert(0, str(dm_delay_min))
+        self.dm_delay_min_input.grid(row=2, column=1, padx=10, pady=5, sticky="w")
+        self.dm_delay_min_input.insert(0, self._format_hours_value(dm_delay_min))
         self.dm_delay_max_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.dm_delay_max_input.grid(row=1, column=2, padx=10, pady=5, sticky="w")
-        self.dm_delay_max_input.insert(0, str(dm_delay_max))
+        self.dm_delay_max_input.grid(row=2, column=2, padx=10, pady=5, sticky="w")
+        self.dm_delay_max_input.insert(0, self._format_hours_value(dm_delay_max))
 
-        ctk.CTkLabel(self.delay_frame, text="Join delay (s) min/max").grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.delay_frame, text="Join delay (h) min/max").grid(row=3, column=0, padx=10, pady=5, sticky="w")
         self.join_delay_min_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.join_delay_min_input.grid(row=2, column=1, padx=10, pady=5, sticky="w")
-        self.join_delay_min_input.insert(0, str(join_delay_min))
+        self.join_delay_min_input.grid(row=3, column=1, padx=10, pady=5, sticky="w")
+        self.join_delay_min_input.insert(0, self._format_hours_value(join_delay_min))
         self.join_delay_max_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.join_delay_max_input.grid(row=2, column=2, padx=10, pady=5, sticky="w")
-        self.join_delay_max_input.insert(0, str(join_delay_max))
+        self.join_delay_max_input.grid(row=3, column=2, padx=10, pady=5, sticky="w")
+        self.join_delay_max_input.insert(0, self._format_hours_value(join_delay_max))
 
-        ctk.CTkLabel(self.delay_frame, text="Friend request delay (s) min/max").grid(row=3, column=0, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.delay_frame, text="Friend request delay (h) min/max").grid(row=4, column=0, padx=10, pady=5, sticky="w")
         self.friend_delay_min_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.friend_delay_min_input.grid(row=3, column=1, padx=10, pady=5, sticky="w")
-        self.friend_delay_min_input.insert(0, str(friend_delay_min))
+        self.friend_delay_min_input.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+        self.friend_delay_min_input.insert(0, self._format_hours_value(friend_delay_min))
         self.friend_delay_max_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.friend_delay_max_input.grid(row=3, column=2, padx=10, pady=5, sticky="w")
-        self.friend_delay_max_input.insert(0, str(friend_delay_max))
+        self.friend_delay_max_input.grid(row=4, column=2, padx=10, pady=5, sticky="w")
+        self.friend_delay_max_input.insert(0, self._format_hours_value(friend_delay_max))
 
-        ctk.CTkLabel(self.delay_frame, text="Status delay (h) min/max").grid(row=4, column=0, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.delay_frame, text="Status delay (h) min/max").grid(row=5, column=0, padx=10, pady=5, sticky="w")
         self.status_delay_min_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.status_delay_min_input.grid(row=4, column=1, padx=10, pady=5, sticky="w")
-        self.status_delay_min_input.insert(0, str(status_delay_min))
+        self.status_delay_min_input.grid(row=5, column=1, padx=10, pady=5, sticky="w")
+        self.status_delay_min_input.insert(0, self._format_hours_value(status_delay_min))
         self.status_delay_max_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.status_delay_max_input.grid(row=4, column=2, padx=10, pady=5, sticky="w")
-        self.status_delay_max_input.insert(0, str(status_delay_max))
+        self.status_delay_max_input.grid(row=5, column=2, padx=10, pady=5, sticky="w")
+        self.status_delay_max_input.insert(0, self._format_hours_value(status_delay_max))
 
-        ctk.CTkLabel(self.delay_frame, text="Account min interval (s)").grid(row=5, column=0, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.delay_frame, text="Account min interval (h)").grid(row=6, column=0, padx=10, pady=5, sticky="w")
         self.account_min_interval_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.account_min_interval_input.grid(row=5, column=1, padx=10, pady=5, sticky="w")
-        self.account_min_interval_input.insert(0, str(account_min_interval))
+        self.account_min_interval_input.grid(row=6, column=1, padx=10, pady=5, sticky="w")
+        self.account_min_interval_input.insert(0, self._format_hours_value(account_min_interval))
 
-        ctk.CTkLabel(self.delay_frame, text="Target min interval (s)").grid(row=6, column=0, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.delay_frame, text="Target min interval (h)").grid(row=7, column=0, padx=10, pady=5, sticky="w")
         self.target_min_interval_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.target_min_interval_input.grid(row=6, column=1, padx=10, pady=5, sticky="w")
-        self.target_min_interval_input.insert(0, str(target_min_interval))
+        self.target_min_interval_input.grid(row=7, column=1, padx=10, pady=5, sticky="w")
+        self.target_min_interval_input.insert(0, self._format_hours_value(target_min_interval))
 
         self.delay_save_btn = ctk.CTkButton(self.delay_frame, text="Save Delays", command=self.save_delay_settings)
-        self.delay_save_btn.grid(row=7, column=0, padx=10, pady=10, sticky="w")
+        self.delay_save_btn.grid(row=8, column=0, padx=10, pady=10, sticky="w")
 
         # 2. JOINER SECTION (NEW)
         self.joiner_frame = ctk.CTkFrame(parent)

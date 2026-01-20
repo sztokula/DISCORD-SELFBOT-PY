@@ -11,6 +11,9 @@ class DiscordJoiner:
         self.metrics = metrics
         self.max_retries = 3
         self.backoff_factor = 1.5
+        self.captcha_retry_base_seconds = 60
+        self.captcha_retry_max_seconds = 900
+        self.max_captcha_retries = 3
 
     def _record_request(self, duration, response=None):
         if not self.metrics:
@@ -162,6 +165,7 @@ class DiscordJoiner:
         self.db.reset_daily_counters()
         accounts = self.db.get_active_accounts("discord")
         joined_any = False
+        pending_retries = []
         
         if not accounts:
             self.log("[Joiner] No active accounts available.")
@@ -179,11 +183,18 @@ class DiscordJoiner:
         self.log(f"[Joiner] Starting to join {len(accounts)} accounts to {len(invite_codes)} invites (random per account).")
 
         did_join_attempt = False
+        join_counts = {}
+        join_limits = {}
+        for acc in accounts:
+            acc_id, _, _, _, _, _, _, _, join_limit, join_today, _ = acc
+            join_counts[acc_id] = join_today
+            join_limits[acc_id] = join_limit
+
         for acc in accounts:
             if not self.is_running: break
             
             acc_id, _, token, proxy, _, _, _, _, join_limit, join_today, _ = acc
-            if join_today >= join_limit:
+            if join_counts.get(acc_id, join_today) >= join_limit:
                 self.log(f"[Joiner] Account {acc_id}: daily join limit reached ({join_today}/{join_limit}).")
                 continue
             invite_code = random.choice(invite_codes)
@@ -199,18 +210,77 @@ class DiscordJoiner:
             
             if success:
                 self.db.increment_join_counter(acc_id)
+                join_counts[acc_id] = join_counts.get(acc_id, 0) + 1
                 joined_any = True
                 if guild_id:
                     self.log(f"[Joiner] Account {acc_id}: JOINED ({invite_code}, guild {guild_id}).")
                 else:
                     self.log(f"[Joiner] Account {acc_id}: JOINED ({invite_code}).")
             else:
-                self.log(f"[Joiner] Account {acc_id}: ERROR ({msg}) [{invite_code}]")
+                if self._is_captcha_error(msg):
+                    self._schedule_join_retry(
+                        pending_retries,
+                        acc_id,
+                        token,
+                        proxy,
+                        invite_code,
+                        0,
+                        msg,
+                    )
+                else:
+                    self.log(f"[Joiner] Account {acc_id}: ERROR ({msg}) [{invite_code}]")
             
             did_join_attempt = True
             # IMPORTANT: add a larger delay between joins.
             wait = random.randint(delay_min, delay_max)
             self.log(f"[Joiner] Waiting {wait}s before the next account...")
+            self._sleep_with_stop(wait)
+
+        while self.is_running and pending_retries:
+            pending_retries.sort(key=lambda item: item["retry_at"])
+            task = pending_retries.pop(0)
+            acc_id = task["acc_id"]
+            if join_counts.get(acc_id, 0) >= join_limits.get(acc_id, 0):
+                self.log(f"[Joiner] Account {acc_id}: daily join limit reached (retry skipped).")
+                continue
+            wait_seconds = max(0.0, task["retry_at"] - time.monotonic())
+            if wait_seconds > 0:
+                self.log(f"[Joiner] Waiting {int(wait_seconds)}s for captcha retry...")
+                self._sleep_with_stop(wait_seconds)
+                if not self.is_running:
+                    break
+            success, msg, guild_id = self.join_server(
+                acc_id,
+                task["token"],
+                task["invite_code"],
+                task["proxy"],
+                auto_accept_rules=auto_accept_rules,
+                auto_onboarding=auto_onboarding,
+                role_whitelist=role_whitelist,
+            )
+            if success:
+                self.db.increment_join_counter(acc_id)
+                join_counts[acc_id] = join_counts.get(acc_id, 0) + 1
+                joined_any = True
+                if guild_id:
+                    self.log(f"[Joiner] Account {acc_id}: JOINED ({task['invite_code']}, guild {guild_id}).")
+                else:
+                    self.log(f"[Joiner] Account {acc_id}: JOINED ({task['invite_code']}).")
+            else:
+                if self._is_captcha_error(msg) and task["attempt"] < self.max_captcha_retries:
+                    self._schedule_join_retry(
+                        pending_retries,
+                        acc_id,
+                        task["token"],
+                        task["proxy"],
+                        task["invite_code"],
+                        task["attempt"],
+                        msg,
+                    )
+                else:
+                    self.log(f"[Joiner] Account {acc_id}: ERROR ({msg}) [{task['invite_code']}]")
+            wait = random.randint(delay_min, delay_max)
+            self.log(f"[Joiner] Waiting {wait}s before the next retry...")
             self._sleep_with_stop(wait)
 
         if self.is_running and not did_join_attempt:
@@ -245,6 +315,27 @@ class DiscordJoiner:
             "rqtoken": data.get("captcha_rqtoken"),
             "url": "https://discord.com",
         }
+
+    def _is_captcha_error(self, message):
+        lowered = (message or "").lower()
+        return "captcha" in lowered and "phone" not in lowered
+
+    def _schedule_join_retry(self, pending_retries, acc_id, token, proxy, invite_code, attempt, error_msg):
+        if attempt >= self.max_captcha_retries:
+            self.log(f"[Captcha] Account {acc_id}: max retries reached ({invite_code}).")
+            return
+        delay = min(self.captcha_retry_max_seconds, self.captcha_retry_base_seconds * (2 ** attempt))
+        pending_retries.append(
+            {
+                "acc_id": acc_id,
+                "token": token,
+                "proxy": proxy,
+                "invite_code": invite_code,
+                "attempt": attempt + 1,
+                "retry_at": time.monotonic() + delay,
+            }
+        )
+        self.log(f"[Captcha] Account {acc_id}: retry scheduled in {int(delay)}s ({invite_code}).")
 
     def _extract_guild_id(self, response):
         try:

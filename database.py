@@ -135,6 +135,7 @@ class DatabaseManager:
                     error_msg TEXT
                 )
             ''')
+            self._ensure_target_columns(conn)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
@@ -156,6 +157,15 @@ class DatabaseManager:
             cursor.execute("ALTER TABLE accounts ADD COLUMN join_last_use TIMESTAMP")
         if "created_at" not in existing:
             cursor.execute("ALTER TABLE accounts ADD COLUMN created_at TIMESTAMP")
+
+    def _ensure_target_columns(self, conn):
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(targets)")
+        existing = {row[1] for row in cursor.fetchall()}
+        if "retry_at" not in existing:
+            cursor.execute("ALTER TABLE targets ADD COLUMN retry_at TIMESTAMP")
+        if "retry_count" not in existing:
+            cursor.execute("ALTER TABLE targets ADD COLUMN retry_count INTEGER DEFAULT 0")
 
     def _get_effective_daily_limit(self, base_limit, created_at):
         if base_limit is None:
@@ -282,6 +292,7 @@ class DatabaseManager:
         cursor = conn.cursor()
         if min_target_interval_seconds and min_target_interval_seconds > 0:
             cutoff = (datetime.now() - timedelta(seconds=min_target_interval_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute('''
                 SELECT t.id, t.user_id
                 FROM targets t
@@ -290,15 +301,29 @@ class DatabaseManager:
                     FROM last_dm
                     GROUP BY target_user_id
                 ) l ON l.target_user_id = t.user_id
-                WHERE t.platform = ? AND t.status = "Pending"
+                WHERE t.platform = ?
+                  AND (
+                    t.status = "Pending"
+                    OR (t.status = "Retry" AND (t.retry_at IS NULL OR t.retry_at <= ?))
+                  )
                   AND (l.last_sent_at IS NULL OR l.last_sent_at < ?)
                 ORDER BY t.id ASC
                 LIMIT 1
-            ''', (platform, cutoff))
+            ''', (platform, now, cutoff))
         else:
             cursor.execute(
-                'SELECT id, user_id FROM targets WHERE platform = ? AND status = "Pending" LIMIT 1',
-                (platform,),
+                '''
+                SELECT id, user_id
+                FROM targets
+                WHERE platform = ?
+                  AND (
+                    status = "Pending"
+                    OR (status = "Retry" AND (retry_at IS NULL OR retry_at <= ?))
+                  )
+                ORDER BY id ASC
+                LIMIT 1
+                ''',
+                (platform, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
             )
         target = cursor.fetchone()
         conn.close()
@@ -347,9 +372,46 @@ class DatabaseManager:
         with self.write_lock:
             conn = self.get_connection()
             cursor = conn.cursor()
-            cursor.execute('UPDATE targets SET status = ?, error_msg = ? WHERE id = ?', (status, error_msg, target_id))
+            if status == "Retry":
+                cursor.execute(
+                    'UPDATE targets SET status = ?, error_msg = ? WHERE id = ?',
+                    (status, error_msg, target_id),
+                )
+            else:
+                cursor.execute(
+                    'UPDATE targets SET status = ?, error_msg = ?, retry_at = NULL WHERE id = ?',
+                    (status, error_msg, target_id),
+                )
             conn.commit()
             conn.close()
+
+    def set_target_retry(self, target_id, retry_at, error_msg=""):
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                '''
+                UPDATE targets
+                SET status = "Retry",
+                    error_msg = ?,
+                    retry_at = ?,
+                    retry_count = COALESCE(retry_count, 0) + 1
+                WHERE id = ?
+                ''',
+                (error_msg, retry_at, target_id),
+            )
+            conn.commit()
+            conn.close()
+
+    def get_target_retry_count(self, target_id):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT retry_count FROM targets WHERE id = ?', (target_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row or row[0] is None:
+            return 0
+        return int(row[0])
 
     def increment_sent_counter(self, account_id):
         with self.write_lock:

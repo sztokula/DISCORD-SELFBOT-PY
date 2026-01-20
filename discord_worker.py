@@ -2,6 +2,7 @@ import httpx
 import time
 import random
 import re
+from datetime import datetime, timedelta
 
 class DiscordWorker:
     def __init__(self, db_manager, log_callback, metrics=None, captcha_solver=None):
@@ -15,6 +16,9 @@ class DiscordWorker:
         self.default_tags = ["#promo", "#info", "#discord", "#community", "#support"]
         self.default_emojis = ["🔥", "✨", "✅", "🚀", "🎉", "💬", "🧩", "🌟"]
         self._last_template = None
+        self.captcha_retry_base_seconds = 60
+        self.captcha_retry_max_seconds = 900
+        self.max_captcha_retries = 3
 
     def _record_request(self, duration, response=None):
         if not self.metrics:
@@ -343,6 +347,20 @@ class DiscordWorker:
             except Exception as e:
                 return False, str(e)
 
+    def _is_captcha_error(self, message):
+        return "captcha" in (message or "").lower()
+
+    def _schedule_captcha_retry(self, target_id, user_id, error_msg):
+        current = self.db.get_target_retry_count(target_id)
+        if current >= self.max_captcha_retries:
+            self.db.update_target_status(target_id, "Failed", error_msg)
+            self.log(f"[Captcha] Target {user_id}: max retries reached. Marked Failed.")
+            return
+        delay = min(self.captcha_retry_max_seconds, self.captcha_retry_base_seconds * (2 ** current))
+        retry_at = datetime.now() + timedelta(seconds=delay)
+        self.db.set_target_retry(target_id, retry_at.strftime("%Y-%m-%d %H:%M:%S"), error_msg)
+        self.log(f"[Captcha] Target {user_id}: retry scheduled in {int(delay)}s.")
+
     def run_mission(
         self,
         message_templates,
@@ -412,8 +430,11 @@ class DiscordWorker:
                     self.db.record_last_dm(acc_id, u_id)
                     self.log(f"[OK] DM sent to {u_id}")
                 else:
-                    self.db.update_target_status(t_id, "Failed", msg)
-                    self.log(f"[!] Error {u_id}: {msg}")
+                    if self._is_captcha_error(msg):
+                        self._schedule_captcha_retry(t_id, u_id, msg)
+                    else:
+                        self.db.update_target_status(t_id, "Failed", msg)
+                        self.log(f"[!] Error {u_id}: {msg}")
 
                 self._sleep_with_stop(random.randint(delay_min, delay_max))
 
