@@ -18,8 +18,9 @@ class DiscordWorker:
     def _record_request(self, duration, response=None):
         if not self.metrics:
             return
-        rate_limited = response is not None and response.status_code == 429
-        self.metrics.record_request(duration, rate_limited=rate_limited)
+        status_code = response.status_code if response is not None else None
+        rate_limited = status_code == 429
+        self.metrics.record_request(duration, status_code=status_code, rate_limited=rate_limited)
 
     def parse_spintax(self, text):
         """Replace {option1|option2} with a random option."""
@@ -156,7 +157,28 @@ class DiscordWorker:
             self.db.remove_account(account_id)
         return None, True
 
-    def send_dm(self, account_id, token, user_id, message_template, proxy=None, add_friend=False, friend_delay_min=0, friend_delay_max=0):
+    def send_dm(
+        self,
+        account_id,
+        token,
+        user_id,
+        message_template,
+        proxy=None,
+        add_friend=False,
+        friend_delay_min=0,
+        friend_delay_max=0,
+        dry_run=False,
+    ):
+        if dry_run:
+            final_msg = self.render_message(message_template)
+            if add_friend:
+                self.log(f"[Dry-Run] Would send friend request to {user_id}.")
+                if friend_delay_max > 0:
+                    delay = random.randint(friend_delay_min, friend_delay_max)
+                    if delay > 0:
+                        self.log(f"[Dry-Run] Waiting {delay}s before DM to {user_id}.")
+                        self._sleep_with_stop(delay)
+            return True, final_msg
         headers = {
             "Authorization": token,
             "Content-Type": "application/json",
@@ -234,6 +256,7 @@ class DiscordWorker:
         friend_delay_max=0,
         account_min_interval_seconds=0,
         target_min_interval_seconds=0,
+        dry_run=False,
     ):
         self.is_running = True
         self._last_template = None
@@ -277,9 +300,16 @@ class DiscordWorker:
                     use_friend_req,
                     friend_delay_min,
                     friend_delay_max,
+                    dry_run,
                 )
-                
-                if success:
+                if dry_run:
+                    self.db.update_target_status(t_id, "Dry-Run")
+                    self.db.increment_sent_counter(acc_id)
+                    self.db.record_last_dm(acc_id, u_id)
+                    preview = msg.replace("\n", " ")[:160]
+                    suffix = "..." if len(msg) > 160 else ""
+                    self.log(f"[Dry-Run] Would DM {u_id}: {preview}{suffix}")
+                elif success:
                     self.db.update_target_status(t_id, "Sent")
                     self.db.increment_sent_counter(acc_id)
                     self.db.record_last_dm(acc_id, u_id)

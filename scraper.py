@@ -13,8 +13,9 @@ class DiscordScraper:
     def _record_request(self, duration, response=None):
         if not self.metrics:
             return
-        rate_limited = response is not None and response.status_code == 429
-        self.metrics.record_request(duration, rate_limited=rate_limited)
+        status_code = response.status_code if response is not None else None
+        rate_limited = status_code == 429
+        self.metrics.record_request(duration, status_code=status_code, rate_limited=rate_limited)
 
     def _get_retry_after(self, response, default=5.0):
         retry_header = response.headers.get("Retry-After")

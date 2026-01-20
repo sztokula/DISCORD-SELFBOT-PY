@@ -79,6 +79,8 @@ class MassDMApp(ctk.CTk):
         self._template_editing = False
         self._template_max_chars = 2000
         self._template_save_job = None
+        self._invalid_input_color = "#e74c3c"
+        self._input_border_defaults = {}
         self.version_status_var = ctk.StringVar(value="Last check: --")
         self.update_status_var = ctk.StringVar(value="Update: --")
         self.update_info = None
@@ -130,6 +132,8 @@ class MassDMApp(ctk.CTk):
         self.health_rate_label.grid(row=1, column=2, padx=10, pady=5, sticky="w")
         self.health_requests_label = ctk.CTkLabel(self.health_frame, text="Requests: --", anchor="w")
         self.health_requests_label.grid(row=1, column=3, padx=10, pady=5, sticky="w")
+        self.health_alert_label = ctk.CTkLabel(self.health_frame, text="Alerts: --", anchor="w", text_color="#8a8a8a")
+        self.health_alert_label.grid(row=2, column=0, columnspan=4, padx=10, pady=(0, 10), sticky="w")
 
         self.workflow_frame = ctk.CTkFrame(self.main_container)
         self.workflow_frame.pack(fill="x", pady=(0, 10))
@@ -167,6 +171,7 @@ class MassDMApp(ctk.CTk):
 
         # 1. MESSAGE SECTION (moved to settings)
         self.friend_request_var = ctk.BooleanVar(value=self._get_setting_bool("use_friend_request", False))
+        self.dry_run_var = ctk.BooleanVar(value=self._get_setting_bool("dry_run", False))
         self.settings_loaded = False
         self.workflow_stage = "setup"
 
@@ -254,6 +259,34 @@ class MassDMApp(ctk.CTk):
     def log_warning(self, message):
         self.add_log(f"[Warn] {message}")
 
+    def _register_input_widget(self, widget):
+        if not widget or widget in self._input_border_defaults:
+            return
+        try:
+            self._input_border_defaults[widget] = widget.cget("border_color")
+        except Exception:
+            self._input_border_defaults[widget] = None
+
+    def _set_input_valid(self, widget, is_valid):
+        if not widget:
+            return
+        try:
+            if not widget.winfo_exists():
+                return
+        except Exception:
+            return
+        if widget not in self._input_border_defaults:
+            self._register_input_widget(widget)
+        try:
+            if is_valid:
+                default = self._input_border_defaults.get(widget)
+                if default is not None:
+                    widget.configure(border_color=default)
+            else:
+                widget.configure(border_color=self._invalid_input_color)
+        except Exception:
+            return
+
     def _get_setting_bool(self, key, default=True):
         value = self.db.get_setting(key, None)
         if value in (None, ""):
@@ -281,18 +314,26 @@ class MassDMApp(ctk.CTk):
             min_val = cast_type(min_raw)
         except (TypeError, ValueError):
             self.log_error(f"{label} (min) must be a number.")
+            self._set_input_valid(min_input, False)
             return None
         try:
             max_val = cast_type(max_raw)
         except (TypeError, ValueError):
             self.log_error(f"{label} (max) must be a number.")
+            self._set_input_valid(max_input, False)
             return None
         if min_val < min_value or max_val < min_value:
             self.log_error(f"{label} must be >= {min_value}.")
+            self._set_input_valid(min_input, False)
+            self._set_input_valid(max_input, False)
             return None
         if min_val > max_val:
             self.log_error(f"{label} min cannot be greater than max.")
+            self._set_input_valid(min_input, False)
+            self._set_input_valid(max_input, False)
             return None
+        self._set_input_valid(min_input, True)
+        self._set_input_valid(max_input, True)
         return min_val, max_val
 
     def _parse_min_value(self, input_widget, label, cast_type=int, min_value=0.0):
@@ -301,10 +342,13 @@ class MassDMApp(ctk.CTk):
             value = cast_type(raw)
         except (TypeError, ValueError):
             self.log_error(f"{label} must be a number.")
+            self._set_input_valid(input_widget, False)
             return None
         if value < min_value:
             self.log_error(f"{label} must be >= {min_value}.")
+            self._set_input_valid(input_widget, False)
             return None
+        self._set_input_valid(input_widget, True)
         return value
 
     def _parse_min_value_from_settings(self, key, label, cast_type=int, min_value=0.0):
@@ -662,15 +706,19 @@ class MassDMApp(ctk.CTk):
     def _set_version_status(self, text):
         self.version_status_var.set(text)
 
-    def _validate_update_endpoint(self, endpoint: str):
+    def _validate_update_endpoint(self, endpoint: str, input_widget=None):
         parsed = urlparse(endpoint)
         if parsed.scheme != "https":
+            self._set_input_valid(input_widget, False)
             return False, "Version endpoint must use https."
         host = parsed.hostname
         if not host:
+            self._set_input_valid(input_widget, False)
             return False, "Invalid version endpoint host."
         if host not in TRUSTED_UPDATE_HOSTS:
+            self._set_input_valid(input_widget, False)
             return False, f"Nieufny host endpointu: {host}."
+        self._set_input_valid(input_widget, True)
         return True, None
 
     def _set_update_status(self, text):
@@ -713,6 +761,9 @@ class MassDMApp(ctk.CTk):
         avg_ms = data["avg_request_ms"]
         rate_count = data["rate_limit_count"]
         last_rate = data["last_rate_limit_age_seconds"]
+        recent_rate = data.get("recent_rate_limit_count", 0)
+        recent_server = data.get("recent_server_error_count", 0)
+        window_seconds = int(data.get("alert_window_seconds", 60))
 
         self.health_uptime_label.configure(text=f"Uptime: {uptime}")
         self.health_avg_label.configure(text=f"Avg request: {avg_ms:.1f} ms")
@@ -722,13 +773,26 @@ class MassDMApp(ctk.CTk):
         else:
             self.health_rate_label.configure(text=f"Rate limits: {rate_count}")
         self.health_requests_label.configure(text=f"Requests: {data['total_requests']}")
+        alerts = []
+        if recent_rate >= 5:
+            alerts.append(f"High 429 rate ({recent_rate}/{window_seconds}s)")
+        if recent_server >= 3:
+            alerts.append(f"5xx errors ({recent_server}/{window_seconds}s)")
+        if alerts:
+            color = "#e74c3c" if recent_server >= 3 else "#f39c12"
+            self.health_alert_label.configure(text=f"Alerts: {'; '.join(alerts)}", text_color=color)
+        else:
+            self.health_alert_label.configure(text="Alerts: none", text_color="#8a8a8a")
 
         self.after(1000, self.refresh_health_metrics)
 
     def save_version_settings(self):
-        endpoint = self.version_endpoint_input.get().strip()
+        endpoint_entry = None
+        if hasattr(self, "version_endpoint_input") and self.version_endpoint_input.winfo_exists():
+            endpoint_entry = self.version_endpoint_input
+        endpoint = endpoint_entry.get().strip() if endpoint_entry else ""
         if endpoint:
-            ok, err = self._validate_update_endpoint(endpoint)
+            ok, err = self._validate_update_endpoint(endpoint, endpoint_entry)
             if not ok:
                 self.log_error(err)
                 self.show_notification(err, level="error")
@@ -736,16 +800,21 @@ class MassDMApp(ctk.CTk):
             self.db.set_setting("version_endpoint", endpoint)
             self.add_log("[Settings] Zapisano endpoint wersji.")
         else:
+            self._set_input_valid(endpoint_entry, True)
             self.db.set_setting("version_endpoint", None)
             self.add_log("[Settings] Removed version endpoint.")
 
     def check_for_updates(self):
-        endpoint = self.version_endpoint_input.get().strip()
+        endpoint_entry = None
+        if hasattr(self, "version_endpoint_input") and self.version_endpoint_input.winfo_exists():
+            endpoint_entry = self.version_endpoint_input
+        endpoint = endpoint_entry.get().strip() if endpoint_entry else ""
         if not endpoint:
+            self._set_input_valid(endpoint_entry, False)
             self.log_error("Version endpoint is empty. Fill it in settings.")
             self.show_notification("Missing version endpoint. Update settings.", level="error")
             return
-        ok, err = self._validate_update_endpoint(endpoint)
+        ok, err = self._validate_update_endpoint(endpoint, endpoint_entry)
         if not ok:
             self.log_error(err)
             self.show_notification(err, level="error")
@@ -843,12 +912,16 @@ class MassDMApp(ctk.CTk):
             messagebox.showerror("Update", message)
 
     def download_update(self):
-        endpoint = self.version_endpoint_input.get().strip()
+        endpoint_entry = None
+        if hasattr(self, "version_endpoint_input") and self.version_endpoint_input.winfo_exists():
+            endpoint_entry = self.version_endpoint_input
+        endpoint = endpoint_entry.get().strip() if endpoint_entry else ""
         if not endpoint:
+            self._set_input_valid(endpoint_entry, False)
             self.log_error("Version endpoint is empty. Fill it in settings.")
             self.show_notification("Missing version endpoint. Update settings.", level="error")
             return
-        ok, err = self._validate_update_endpoint(endpoint)
+        ok, err = self._validate_update_endpoint(endpoint, endpoint_entry)
         if not ok:
             self.log_error(err)
             self.show_notification(err, level="error")
@@ -890,29 +963,37 @@ class MassDMApp(ctk.CTk):
         self.after(0, lambda: self._set_update_status("Update: installed"))
         self.after(0, lambda: self.show_notification("Update installed. Restart the app.", level="success"))
 
-    def validate_token_format(self, token):
+    def validate_token_format(self, token, input_widget=None):
         if not token:
             self.log_error("Invalid token: empty field.")
+            self._set_input_valid(input_widget, False)
             return False
         token_pattern = re.compile(r"^[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+$")
         if not token_pattern.match(token) or len(token) < 50:
             self.log_error("Invalid token format.")
+            self._set_input_valid(input_widget, False)
             return False
+        self._set_input_valid(input_widget, True)
         return True
 
-    def validate_proxy(self, proxy):
+    def validate_proxy(self, proxy, input_widget=None):
         if not proxy:
+            self._set_input_valid(input_widget, True)
             return True
         parsed = urlparse(proxy)
         if parsed.scheme and parsed.hostname and parsed.port:
             if parsed.scheme not in {"http", "https", "socks5"}:
                 self.log_error("Invalid proxy format.")
+                self._set_input_valid(input_widget, False)
                 return False
+            self._set_input_valid(input_widget, True)
             return True
         parsed = urlparse(f"http://{proxy}")
         if parsed.hostname and parsed.port:
+            self._set_input_valid(input_widget, True)
             return True
         self.log_error("Invalid proxy format.")
+        self._set_input_valid(input_widget, False)
         return False
 
     def normalize_invite(self, invite):
@@ -939,35 +1020,46 @@ class MassDMApp(ctk.CTk):
             return invite
         return None
 
-    def is_valid_channel_id(self, channel_id):
+    def is_valid_channel_id(self, channel_id, input_widget=None):
         if not channel_id:
             self.log_error("Invalid Channel ID: empty field.")
+            self._set_input_valid(input_widget, False)
             return False
         if not re.match(r"^\d{17,20}$", channel_id):
             self.log_error("Invalid Channel ID format.")
+            self._set_input_valid(input_widget, False)
             return False
+        self._set_input_valid(input_widget, True)
         return True
 
-    def _get_scrape_limit(self, raw_value, default_limit):
+    def _get_scrape_limit(self, raw_value, default_limit, input_widget=None):
         value = (raw_value or "").strip()
         if not value:
+            self._set_input_valid(input_widget, True)
             return default_limit
         try:
             limit = int(value)
         except ValueError:
             self.log_error("Invalid Range format. Use an integer.")
+            self._set_input_valid(input_widget, False)
             return None
         if limit <= 0:
             self.log_error("Range must be greater than zero.")
+            self._set_input_valid(input_widget, False)
             return None
+        self._set_input_valid(input_widget, True)
         return limit
-    def is_valid_guild_id(self, guild_id):
+
+    def is_valid_guild_id(self, guild_id, input_widget=None):
         if not guild_id:
             self.log_error("Invalid Guild ID: empty field.")
+            self._set_input_valid(input_widget, False)
             return False
         if not re.match(r"^\d{17,20}$", guild_id):
             self.log_error("Invalid Guild ID format.")
+            self._set_input_valid(input_widget, False)
             return False
+        self._set_input_valid(input_widget, True)
         return True
 
     def process_log_queue(self):
@@ -1068,23 +1160,31 @@ class MassDMApp(ctk.CTk):
         proxy = self.proxy_input.get().strip()
         dm_limit_raw = self.dm_limit_input.get().strip()
         join_limit_raw = self.join_limit_input.get().strip()
-        if not self.validate_token_format(token):
+        if not self.validate_token_format(token, self.token_input):
             return
-        if not self.validate_proxy(proxy):
+        if not self.validate_proxy(proxy, self.proxy_input):
             return
         try:
             dm_limit = int(dm_limit_raw) if dm_limit_raw else 15
         except ValueError:
             self.log_error("DM limit must be an integer.")
+            self._set_input_valid(self.dm_limit_input, False)
             return
         try:
             join_limit = int(join_limit_raw) if join_limit_raw else 5
         except ValueError:
             self.log_error("Join limit must be an integer.")
+            self._set_input_valid(self.join_limit_input, False)
             return
         if dm_limit <= 0 or join_limit <= 0:
             self.log_error("Limits must be greater than zero.")
+            if dm_limit <= 0:
+                self._set_input_valid(self.dm_limit_input, False)
+            if join_limit <= 0:
+                self._set_input_valid(self.join_limit_input, False)
             return
+        self._set_input_valid(self.dm_limit_input, True)
+        self._set_input_valid(self.join_limit_input, True)
         self.add_acc_btn.configure(state="disabled")
         thread = threading.Thread(
             target=self._add_account_worker,
@@ -1168,6 +1268,10 @@ class MassDMApp(ctk.CTk):
         self.dm_limit_input.insert(0, "15")
         self.join_limit_input.delete(0, "end")
         self.join_limit_input.insert(0, "5")
+        self._set_input_valid(self.token_input, True)
+        self._set_input_valid(self.proxy_input, True)
+        self._set_input_valid(self.dm_limit_input, True)
+        self._set_input_valid(self.join_limit_input, True)
 
     def _get_invite_list(self, raw_text=None, log_invalid=True):
         if raw_text is None:
@@ -1257,30 +1361,40 @@ class MassDMApp(ctk.CTk):
         if not self.module_vars["scraper"].get():
             self.log_error("Scraper module is disabled.")
             return False
-        token = ""
-        if hasattr(self, "token_input") and self.token_input.winfo_exists():
-            token = self.token_input.get().strip()
+        token_entry = self.token_input if hasattr(self, "token_input") and self.token_input.winfo_exists() else None
+        if token_entry:
+            token = token_entry.get().strip()
         else:
             token = self.db.get_setting("scrape_token", "").strip()
         if not token:
             self.log_error("Open settings and enter a scraping token.")
             return False
-        if hasattr(self, "scrape_channel_input") and self.scrape_channel_input.winfo_exists():
-            channel_id = self.scrape_channel_input.get().strip()
+        channel_entry = (
+            self.scrape_channel_input
+            if hasattr(self, "scrape_channel_input") and self.scrape_channel_input.winfo_exists()
+            else None
+        )
+        if channel_entry:
+            channel_id = channel_entry.get().strip()
         else:
             channel_id = self.db.get_setting("scrape_channel_id", "").strip()
-        if hasattr(self, "scrape_range_input") and self.scrape_range_input.winfo_exists():
-            range_value = self.scrape_range_input.get().strip()
+        range_entry = (
+            self.scrape_range_input
+            if hasattr(self, "scrape_range_input") and self.scrape_range_input.winfo_exists()
+            else None
+        )
+        if range_entry:
+            range_value = range_entry.get().strip()
         else:
             range_value = self.db.get_setting("scrape_range", "").strip()
-        if not self.validate_token_format(token):
+        if not self.validate_token_format(token, token_entry):
             return False
-        if not self.is_valid_channel_id(channel_id):
+        if not self.is_valid_channel_id(channel_id, channel_entry):
             return False
-        limit = self._get_scrape_limit(range_value, 500)
+        limit = self._get_scrape_limit(range_value, 500, range_entry)
         if limit is None:
             return False
-        if hasattr(self, "scrape_channel_input") and self.scrape_channel_input.winfo_exists():
+        if channel_entry:
             self.save_scrape_settings()
         thread = threading.Thread(
             target=self.scraper.scrape_history,
@@ -1294,30 +1408,40 @@ class MassDMApp(ctk.CTk):
         if not self.module_vars["scraper"].get():
             self.log_error("Scraper module is disabled.")
             return False
-        token = ""
-        if hasattr(self, "token_input") and self.token_input.winfo_exists():
-            token = self.token_input.get().strip()
+        token_entry = self.token_input if hasattr(self, "token_input") and self.token_input.winfo_exists() else None
+        if token_entry:
+            token = token_entry.get().strip()
         else:
             token = self.db.get_setting("scrape_token", "").strip()
         if not token:
             self.log_error("Open settings and enter a scraping token.")
             return False
-        if hasattr(self, "scrape_guild_input") and self.scrape_guild_input.winfo_exists():
-            guild_id = self.scrape_guild_input.get().strip()
+        guild_entry = (
+            self.scrape_guild_input
+            if hasattr(self, "scrape_guild_input") and self.scrape_guild_input.winfo_exists()
+            else None
+        )
+        if guild_entry:
+            guild_id = guild_entry.get().strip()
         else:
             guild_id = self.db.get_setting("scrape_guild_id", "").strip()
-        if hasattr(self, "scrape_range_input") and self.scrape_range_input.winfo_exists():
-            range_value = self.scrape_range_input.get().strip()
+        range_entry = (
+            self.scrape_range_input
+            if hasattr(self, "scrape_range_input") and self.scrape_range_input.winfo_exists()
+            else None
+        )
+        if range_entry:
+            range_value = range_entry.get().strip()
         else:
             range_value = self.db.get_setting("scrape_range", "").strip()
-        if not self.validate_token_format(token):
+        if not self.validate_token_format(token, token_entry):
             return False
-        if not self.is_valid_guild_id(guild_id):
+        if not self.is_valid_guild_id(guild_id, guild_entry):
             return False
-        limit = self._get_scrape_limit(range_value, 1000)
+        limit = self._get_scrape_limit(range_value, 1000, range_entry)
         if limit is None:
             return False
-        if hasattr(self, "scrape_guild_input") and self.scrape_guild_input.winfo_exists():
+        if guild_entry:
             self.save_scrape_settings()
         thread = threading.Thread(
             target=self.scraper.scrape_guild_members,
@@ -1458,6 +1582,9 @@ class MassDMApp(ctk.CTk):
         self.db.set_setting("account_min_interval", str(account_min_interval))
         self.db.set_setting("target_min_interval", str(target_min_interval))
         use_friend_req = self.friend_request_var.get()
+        dry_run = self.dry_run_var.get()
+        if dry_run:
+            self.add_log("[Mission] Dry-run enabled. Messages will not be sent.")
         thread = threading.Thread(
             target=self.worker.run_mission,
             args=(
@@ -1469,6 +1596,7 @@ class MassDMApp(ctk.CTk):
                 friend_delay_max,
                 account_min_interval,
                 target_min_interval,
+                dry_run,
             ),
         )
         thread.daemon = True
@@ -1485,12 +1613,15 @@ class MassDMApp(ctk.CTk):
         raw_id = self.remove_account_input.get().strip()
         if not raw_id:
             self.log_error("Enter an account ID to remove.")
+            self._set_input_valid(self.remove_account_input, False)
             return
         try:
             account_id = int(raw_id)
         except ValueError:
             self.log_error("Account ID must be a number.")
+            self._set_input_valid(self.remove_account_input, False)
             return
+        self._set_input_valid(self.remove_account_input, True)
         self.db.remove_account(account_id)
         self.add_log(f"[Accounts] Removed account {account_id}.")
         self.remove_account_input.delete(0, "end")
@@ -1612,8 +1743,9 @@ class MassDMApp(ctk.CTk):
         pending = counts.get("Pending", 0)
         sent = counts.get("Sent", 0)
         failed = counts.get("Failed", 0)
+        dry_run = counts.get("Dry-Run", 0)
         self.target_summary_label.configure(
-            text=f"Targets: {total} | Pending: {pending} | Sent: {sent} | Failed: {failed}"
+            text=f"Targets: {total} | Pending: {pending} | Sent: {sent} | Failed: {failed} | Dry-Run: {dry_run}"
         )
         targets = self.db.get_targets(limit=50)
         self.target_overview_box.delete("1.0", "end")
@@ -1673,6 +1805,8 @@ class MassDMApp(ctk.CTk):
             self.start_btn.configure(state="normal" if dm_enabled else "disabled")
         if hasattr(self, "friend_request_toggle"):
             self.friend_request_toggle.configure(state="normal" if dm_enabled else "disabled")
+        if hasattr(self, "dry_run_toggle"):
+            self.dry_run_toggle.configure(state="normal" if dm_enabled else "disabled")
         if hasattr(self, "invite_save_btn"):
             self.invite_save_btn.configure(state="normal")
         if hasattr(self, "scrape_btn"):
@@ -1723,6 +1857,7 @@ class MassDMApp(ctk.CTk):
             self.save_version_settings()
             self.save_status_settings()
             self._set_setting_bool("use_friend_request", self.friend_request_var.get())
+            self._set_setting_bool("dry_run", self.dry_run_var.get())
             self.settings_window.destroy()
             self.refresh_workflow_status()
         self.settings_window = None
@@ -1968,6 +2103,12 @@ class MassDMApp(ctk.CTk):
             variable=self.friend_request_var,
         )
         self.friend_request_toggle.pack(anchor="w", padx=20, pady=(0, 10))
+        self.dry_run_toggle = ctk.CTkCheckBox(
+            self.msg_frame,
+            text="Dry-run (log only, no send)",
+            variable=self.dry_run_var,
+        )
+        self.dry_run_toggle.pack(anchor="w", padx=20, pady=(0, 10))
         self.templates_action_row = ctk.CTkFrame(self.msg_frame, fg_color="transparent")
         self.templates_action_row.pack(fill="x", padx=20, pady=(0, 10))
         self.templates_save_btn = ctk.CTkButton(
