@@ -123,25 +123,8 @@ class MassDMApp(ctk.CTk):
         self.health_requests_label = ctk.CTkLabel(self.health_frame, text="Requests: --", anchor="w")
         self.health_requests_label.grid(row=1, column=3, padx=10, pady=5, sticky="w")
 
-        # 1. SEKCJA WIADOMOĹšCI
-        self.msg_frame = ctk.CTkFrame(self.main_container)
-        self.msg_frame.pack(fill="x", pady=10)
-        ctk.CTkLabel(self.msg_frame, text="Message Templates", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=5)
-        ctk.CTkLabel(
-            self.msg_frame,
-            text="Szablony oddzielaj liniÄ…: --- | Tokeny: [[tag]], [[emoji]], [[num]], [[num:1-99]] | Spintax: {a|b}",
-            font=ctk.CTkFont(size=12),
-            text_color="#b0b0b0",
-        ).pack(pady=(0, 5))
-        self.msg_input = ctk.CTkTextbox(self.msg_frame, height=100)
-        self.msg_input.pack(fill="x", padx=20, pady=10)
+        # 1. SEKCJA WIADOMOĹšCI (przeniesiona do ustawien)
         self.friend_request_var = ctk.BooleanVar(value=False)
-        self.friend_request_toggle = ctk.CTkCheckBox(
-            self.msg_frame,
-            text="WyĹ›lij zaproszenie do znajomych przed DM",
-            variable=self.friend_request_var,
-        )
-        self.friend_request_toggle.pack(anchor="w", padx=20, pady=(0, 10))
 
         # 2. SEKCJA LOGĂ“W
         self.log_frame = ctk.CTkFrame(self.main_container)
@@ -894,6 +877,9 @@ class MassDMApp(ctk.CTk):
         if not self.module_vars["dm"].get():
             self.log_error("ModuĹ‚ DM jest wyĹ‚Ä…czony.")
             return
+        if not hasattr(self, "msg_input"):
+            self.log_error("OtwĂłrz ustawienia i ustaw szablony wiadomoĹ›ci.")
+            return
         raw = self.msg_input.get("1.0", "end").strip()
         if not raw:
             self.log_error("Pusta wiadomoĹ›Ä‡.")
@@ -1136,17 +1122,28 @@ class MassDMApp(ctk.CTk):
         status_enabled = self.module_vars["status"].get()
         captcha_enabled = self.module_vars["captcha"].get()
 
-        self.start_btn.configure(state="normal" if dm_enabled else "disabled")
-        self.friend_request_toggle.configure(state="normal" if dm_enabled else "disabled")
-        self.join_btn.configure(state="normal" if joiner_enabled else "disabled")
-        self.scrape_btn.configure(state="normal" if scraper_enabled else "disabled")
-        self.scrape_guild_btn.configure(state="normal" if scraper_enabled else "disabled")
-        self.update_status_btn.configure(state="normal" if status_enabled else "disabled")
-        self.stop_status_btn.configure(state="normal" if status_enabled else "disabled")
-        self.captcha_save_btn.configure(state="normal" if captcha_enabled else "disabled")
-        self.captcha_test_btn.configure(state="normal" if captcha_enabled else "disabled")
-        self.captcha_provider.configure(state="normal" if captcha_enabled else "disabled")
-        self.captcha_key_input.configure(state="normal" if captcha_enabled else "disabled")
+        if hasattr(self, "start_btn"):
+            self.start_btn.configure(state="normal" if dm_enabled else "disabled")
+        if hasattr(self, "friend_request_toggle"):
+            self.friend_request_toggle.configure(state="normal" if dm_enabled else "disabled")
+        if hasattr(self, "join_btn"):
+            self.join_btn.configure(state="normal" if joiner_enabled else "disabled")
+        if hasattr(self, "scrape_btn"):
+            self.scrape_btn.configure(state="normal" if scraper_enabled else "disabled")
+        if hasattr(self, "scrape_guild_btn"):
+            self.scrape_guild_btn.configure(state="normal" if scraper_enabled else "disabled")
+        if hasattr(self, "update_status_btn"):
+            self.update_status_btn.configure(state="normal" if status_enabled else "disabled")
+        if hasattr(self, "stop_status_btn"):
+            self.stop_status_btn.configure(state="normal" if status_enabled else "disabled")
+        if hasattr(self, "captcha_save_btn"):
+            self.captcha_save_btn.configure(state="normal" if captcha_enabled else "disabled")
+        if hasattr(self, "captcha_test_btn"):
+            self.captcha_test_btn.configure(state="normal" if captcha_enabled else "disabled")
+        if hasattr(self, "captcha_provider"):
+            self.captcha_provider.configure(state="normal" if captcha_enabled else "disabled")
+        if hasattr(self, "captcha_key_input"):
+            self.captcha_key_input.configure(state="normal" if captcha_enabled else "disabled")
 
     def open_settings_window(self):
         if self.settings_window and self.settings_window.winfo_exists():
@@ -1290,6 +1287,24 @@ class MassDMApp(ctk.CTk):
         self.status_toggle.grid(row=2, column=1, padx=10, pady=5, sticky="w")
         self.captcha_toggle = ctk.CTkCheckBox(self.module_frame, text="Captcha Module", variable=self.module_vars["captcha"], command=self.on_module_toggle)
         self.captcha_toggle.grid(row=3, column=0, padx=10, pady=5, sticky="w")
+
+        self.msg_frame = ctk.CTkFrame(parent)
+        self.msg_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(self.msg_frame, text="Message Templates", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=5)
+        ctk.CTkLabel(
+            self.msg_frame,
+            text="Szablony oddzielaj liniÄ…: --- | Tokeny: [[tag]], [[emoji]], [[num]], [[num:1-99]] | Spintax: {a|b}",
+            font=ctk.CTkFont(size=12),
+            text_color="#b0b0b0",
+        ).pack(pady=(0, 5))
+        self.msg_input = ctk.CTkTextbox(self.msg_frame, height=100)
+        self.msg_input.pack(fill="x", padx=20, pady=10)
+        self.friend_request_toggle = ctk.CTkCheckBox(
+            self.msg_frame,
+            text="WyĹ›lij zaproszenie do znajomych przed DM",
+            variable=self.friend_request_var,
+        )
+        self.friend_request_toggle.pack(anchor="w", padx=20, pady=(0, 10))
 
         self.delay_frame = ctk.CTkFrame(parent)
         self.delay_frame.pack(fill="x", pady=10)
