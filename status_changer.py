@@ -7,6 +7,7 @@ class StatusChanger:
         self.db = db_manager
         self.log = log_callback
         self.is_running = False
+        self.auto_running = False
         self.max_retries = 3
         self.backoff_factor = 1.5
 
@@ -29,14 +30,16 @@ class StatusChanger:
         except (TypeError, ValueError):
             return default
 
-    def _wait_for_rate_limit(self, response, attempt):
+    def _wait_for_rate_limit(self, response, attempt, running_check=None):
         retry_after = self._get_retry_after(response)
         wait_time = retry_after * (self.backoff_factor ** attempt)
-        self._sleep_with_stop(wait_time)
+        self._sleep_with_stop(wait_time, running_check=running_check)
 
-    def _sleep_with_stop(self, total_seconds, interval=0.5):
+    def _sleep_with_stop(self, total_seconds, interval=0.5, running_check=None):
+        if running_check is None:
+            running_check = lambda: self.is_running
         end_time = time.monotonic() + max(0.0, total_seconds)
-        while self.is_running and time.monotonic() < end_time:
+        while running_check() and time.monotonic() < end_time:
             remaining = end_time - time.monotonic()
             time.sleep(min(interval, max(0.0, remaining)))
 
@@ -67,7 +70,7 @@ class StatusChanger:
                         return True
                     if response.status_code == 429:
                         self.log("[Status] Rate limit! Stosuję backoff...")
-                        self._wait_for_rate_limit(response, attempt)
+                        self._wait_for_rate_limit(response, attempt, running_check=lambda: self.is_running or self.auto_running)
                         continue
                     self.log(f"[Status] Błąd {response.status_code} dla tokenu {token[:10]}...")
                     return False
@@ -77,8 +80,7 @@ class StatusChanger:
             self.log(f"[Status] Wyjątek: {str(e)}")
             return False
 
-    def update_all_accounts(self, status_type, custom_text):
-        self.is_running = True
+    def _update_all_accounts(self, status_type, custom_text, running_check):
         accounts = self.db.get_active_accounts("discord")
         
         if not accounts:
@@ -88,7 +90,8 @@ class StatusChanger:
         self.log(f"[Status] Zmieniam status dla {len(accounts)} kont na '{custom_text}'...")
         
         for acc in accounts:
-            if not self.is_running: break
+            if not running_check():
+                break
             
             acc_id, _, token, proxy, _, _, _, _, _, _, _ = acc
             success = self.change_status(token, status_type, custom_text, proxy)
@@ -97,10 +100,32 @@ class StatusChanger:
                 self.log(f"[Status] Konto {acc_id} zaktualizowane.")
             
             # Mały delay, żeby nie wysłać wszystkiego w jednej sekundzie
-            self._sleep_with_stop(random.uniform(1.0, 3.0))
+            self._sleep_with_stop(random.uniform(1.0, 3.0), running_check=running_check)
             
         self.log("[Status] Proces aktualizacji zakończony.")
-        self.is_running = False
+
+    def update_all_accounts(self, status_type, custom_text):
+        self.is_running = True
+        try:
+            self._update_all_accounts(status_type, custom_text, running_check=lambda: self.is_running)
+        finally:
+            self.is_running = False
+
+    def run_auto_update(self, status_type, custom_text, interval_hours):
+        if self.auto_running:
+            self.log("[Status] Automatyczny status changer już działa.")
+            return
+        self.auto_running = True
+        interval_seconds = max(0.1, float(interval_hours)) * 3600.0
+        while self.auto_running:
+            self.log("[Status] Start automatycznej aktualizacji statusów.")
+            self._update_all_accounts(status_type, custom_text, running_check=lambda: self.auto_running)
+            if not self.auto_running:
+                break
+            self.log(f"[Status] Kolejna aktualizacja za {interval_seconds / 3600:.2f}h.")
+            self._sleep_with_stop(interval_seconds, running_check=lambda: self.auto_running)
+        self.auto_running = False
 
     def stop(self):
         self.is_running = False
+        self.auto_running = False

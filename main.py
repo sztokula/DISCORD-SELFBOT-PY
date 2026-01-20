@@ -216,9 +216,25 @@ class MassDMApp(ctk.CTk):
     def start_status_update(self):
         status_type = self.status_type_var.get()
         custom_text = self.status_text_input.get()
-        thread = threading.Thread(target=self.status_changer.update_all_accounts, args=(status_type, custom_text))
+        interval_raw = self.status_interval_input.get().strip()
+        try:
+            interval_hours = float(interval_raw)
+        except ValueError:
+            self.log_error("Interwał statusu musi być liczbą (godziny).")
+            return
+        if interval_hours <= 0:
+            self.log_error("Interwał statusu musi być większy od zera.")
+            return
+        thread = threading.Thread(
+            target=self.status_changer.run_auto_update,
+            args=(status_type, custom_text, interval_hours),
+        )
         thread.daemon = True
         thread.start()
+
+    def stop_status_update(self):
+        self.status_changer.stop()
+        self.add_log("[Status] Automatyczna zmiana statusu zatrzymana.")
 
     def start_mission(self):
         raw = self.msg_input.get("1.0", "end").strip()
@@ -317,8 +333,13 @@ class MassDMApp(ctk.CTk):
         self.status_type_var = ctk.StringVar(value="online")
         self.status_dropdown = ctk.CTkOptionMenu(self.status_frame, values=["online", "idle", "dnd", "invisible"], variable=self.status_type_var)
         self.status_dropdown.grid(row=1, column=1, padx=10, pady=5)
-        self.update_status_btn = ctk.CTkButton(self.status_frame, text="Update Statuses", fg_color="#9b59b6", command=self.start_status_update)
-        self.update_status_btn.grid(row=2, column=0, columnspan=2, pady=10)
+        self.status_interval_input = ctk.CTkEntry(self.status_frame, placeholder_text="Interval (hours)", width=200)
+        self.status_interval_input.grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.status_interval_input.insert(0, "3")
+        self.update_status_btn = ctk.CTkButton(self.status_frame, text="Start Auto Status", fg_color="#9b59b6", command=self.start_status_update)
+        self.update_status_btn.grid(row=3, column=0, pady=10, sticky="w")
+        self.stop_status_btn = ctk.CTkButton(self.status_frame, text="Stop Auto Status", fg_color="#c0392b", command=self.stop_status_update)
+        self.stop_status_btn.grid(row=3, column=1, pady=10, sticky="e")
 
         # 5. SEKCJA SCRAPERA
         self.scrape_frame = ctk.CTkFrame(parent)
