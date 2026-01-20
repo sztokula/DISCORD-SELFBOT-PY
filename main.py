@@ -16,6 +16,7 @@ from scraper import DiscordScraper
 from status_changer import StatusChanger
 from joiner import DiscordJoiner # Import nowego modułu
 from token_manager import TokenManager
+from updater import UpdateManager, UpdateError
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -60,6 +61,8 @@ class MassDMApp(ctk.CTk):
         self.grid_rowconfigure(0, weight=1)
         self.settings_window = None
         self.version_status_var = ctk.StringVar(value="Last check: --")
+        self.update_status_var = ctk.StringVar(value="Update: --")
+        self.update_info = None
 
         # --- SIDEBAR ---
         self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
@@ -228,6 +231,13 @@ class MassDMApp(ctk.CTk):
     def _set_version_status(self, text):
         self.version_status_var.set(text)
 
+    def _set_update_status(self, text):
+        self.update_status_var.set(text)
+
+    def _set_update_button_state(self, enabled):
+        if hasattr(self, "update_download_btn"):
+            self.update_download_btn.configure(state="normal" if enabled else "disabled")
+
     def save_version_settings(self):
         endpoint = self.version_endpoint_input.get().strip()
         if endpoint:
@@ -262,6 +272,7 @@ class MassDMApp(ctk.CTk):
 
         latest = data.get("latest_version") or data.get("version")
         download_url = data.get("download_url") or data.get("url")
+        files_payload = data.get("files")
         if not latest:
             self.add_log("[Updater] Brak pola latest_version/version w odpowiedzi.")
             self.after(0, lambda: self._set_version_status("Last check: invalid response"))
@@ -279,7 +290,54 @@ class MassDMApp(ctk.CTk):
         if download_url:
             message += f" Link: {download_url}"
         self.add_log(message)
+        update_available = comparison is not None and comparison < 0 and (download_url or files_payload)
+        if update_available:
+            self.update_info = data
+            self.after(0, lambda: self._set_update_button_state(True))
+            self.after(0, lambda: self._set_update_status("Update: dostępna"))
+        else:
+            self.update_info = None
+            self.after(0, lambda: self._set_update_button_state(False))
+            self.after(0, lambda: self._set_update_status("Update: brak"))
         self.after(0, lambda: self._set_version_status(f"Last check: {latest}"))
+
+    def download_update(self):
+        endpoint = self.version_endpoint_input.get().strip()
+        if not endpoint:
+            self.log_error("Endpoint wersji jest pusty. Uzupełnij go w ustawieniach.")
+            return
+        self.db.set_setting("version_endpoint", endpoint)
+        self.add_log("[Updater] Pobieranie aktualizacji...")
+        self._set_update_button_state(False)
+        self._set_update_status("Update: pobieranie...")
+        threading.Thread(
+            target=self._download_update_worker,
+            args=(endpoint,),
+            daemon=True,
+        ).start()
+
+    def _download_update_worker(self, endpoint):
+        try:
+            with request.urlopen(endpoint, timeout=10) as response:
+                payload = response.read().decode("utf-8")
+            data = json.loads(payload)
+        except (URLError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            self.add_log(f"[Updater] Nie udało się pobrać aktualizacji: {exc}")
+            self.after(0, lambda: self._set_update_status("Update: błąd pobierania"))
+            self.after(0, lambda: self._set_update_button_state(True))
+            return
+
+        updater = UpdateManager(Path(__file__).resolve().parent, self.add_log)
+        try:
+            updater.download_and_apply(data)
+        except UpdateError as exc:
+            self.add_log(f"[Updater] Aktualizacja nieudana: {exc}")
+            self.after(0, lambda: self._set_update_status("Update: błąd walidacji"))
+            self.after(0, lambda: self._set_update_button_state(True))
+            return
+
+        self.add_log("[Updater] Aktualizacja zakończona. Uruchom ponownie aplikację.")
+        self.after(0, lambda: self._set_update_status("Update: zainstalowana"))
 
     def validate_token_format(self, token):
         if not token:
@@ -989,6 +1047,16 @@ class MassDMApp(ctk.CTk):
         self.version_check_btn.grid(row=3, column=1, padx=10, pady=10, sticky="w")
         self.version_status_label = ctk.CTkLabel(self.version_frame, textvariable=self.version_status_var, text_color="#8a8a8a")
         self.version_status_label.grid(row=4, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="w")
+        self.update_download_btn = ctk.CTkButton(
+            self.version_frame,
+            text="Download & Install",
+            fg_color="#27ae60",
+            command=self.download_update,
+            state="disabled",
+        )
+        self.update_download_btn.grid(row=5, column=0, padx=10, pady=(0, 10), sticky="w")
+        self.update_status_label = ctk.CTkLabel(self.version_frame, textvariable=self.update_status_var, text_color="#8a8a8a")
+        self.update_status_label.grid(row=5, column=1, padx=10, pady=(0, 10), sticky="w")
 
         self.target_frame = ctk.CTkFrame(parent)
         self.target_frame.pack(fill="x", pady=10)
