@@ -3,6 +3,7 @@ import queue
 import re
 import threading
 from datetime import datetime
+from pathlib import Path
 from tkinter import filedialog
 from urllib.parse import urlparse
 from database import DatabaseManager
@@ -41,6 +42,7 @@ class MassDMApp(ctk.CTk):
         self.logs_dir = Path("logs")
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.log_file_path = self.logs_dir / f"app_{datetime.now().strftime('%Y%m%d')}.log"
+        self.banlist_path = Path("banned_dead_tokens.txt")
 
         self.title("Mass-DM Farm Tool Pro v1.0")
         self.geometry("1100x1000") # Zwiększona wysokość na nową sekcję
@@ -561,6 +563,29 @@ class MassDMApp(ctk.CTk):
         for user_id, status in targets:
             self.target_overview_box.insert("end", f"{user_id} | {status}\n")
 
+    def refresh_banlist_overview(self):
+        self.banlist_box.delete("1.0", "end")
+        if not self.banlist_path.exists():
+            self.banlist_summary_label.configure(text="Banlist: 0")
+            self.banlist_box.insert("end", "Brak wpisów w banliście.\n")
+            return
+        try:
+            lines = self.banlist_path.read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            self.log_error(f"Nie można odczytać banlisty: {exc}")
+            self.banlist_summary_label.configure(text="Banlist: ?")
+            self.banlist_box.insert("end", "Nie udało się odczytać banlisty.\n")
+            return
+        entries = [line for line in lines if line.strip()]
+        self.banlist_summary_label.configure(text=f"Banlist: {len(entries)}")
+        if not entries:
+            self.banlist_box.insert("end", "Brak wpisów w banliście.\n")
+            return
+        self.banlist_box.insert("end", "Timestamp | Token\n")
+        self.banlist_box.insert("end", "-" * 80 + "\n")
+        for entry in entries[-200:]:
+            self.banlist_box.insert("end", f"{entry}\n")
+
     def on_module_toggle(self):
         self._set_setting_bool("module_dm", self.module_vars["dm"].get())
         self._set_setting_bool("module_joiner", self.module_vars["joiner"].get())
@@ -808,6 +833,25 @@ class MassDMApp(ctk.CTk):
         self.target_overview_box = ctk.CTkTextbox(self.target_frame, height=100)
         self.target_overview_box.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
 
+        self.banlist_frame = ctk.CTkFrame(parent)
+        self.banlist_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(
+            self.banlist_frame,
+            text="Banlist (Banned/Dead Tokens)",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).grid(row=0, column=0, columnspan=2, pady=10)
+        self.banlist_summary_label = ctk.CTkLabel(self.banlist_frame, text="Banlist: 0", anchor="w")
+        self.banlist_summary_label.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.banlist_refresh_btn = ctk.CTkButton(
+            self.banlist_frame,
+            text="Refresh Banlist",
+            command=self.refresh_banlist_overview,
+        )
+        self.banlist_refresh_btn.grid(row=1, column=1, padx=10, pady=5, sticky="e")
+        self.banlist_box = ctk.CTkTextbox(self.banlist_frame, height=140)
+        self.banlist_box.grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky="ew")
+        self.banlist_frame.grid_columnconfigure(0, weight=1)
+
         # 4. SEKCJA STATUSU
         self.status_frame = ctk.CTkFrame(parent)
         self.status_frame.pack(fill="x", pady=10)
@@ -848,6 +892,7 @@ class MassDMApp(ctk.CTk):
         self.scrape_guild_btn.grid(row=2, column=2, padx=10, pady=5, sticky="w")
         self.refresh_accounts_overview()
         self.refresh_targets_overview()
+        self.refresh_banlist_overview()
         self.apply_module_states()
 
     def on_captcha_provider_change(self, _value=None):
