@@ -9,11 +9,12 @@ class TokenManager:
         self.max_validation_retries = 2
         self.retry_backoff_seconds = 2.0
 
-    def _fetch_token_info(self, token):
+    def _fetch_token_info(self, token, proxy=None):
         url = "https://discord.com/api/v9/users/@me"
         headers = {"Authorization": token}
+        proxies = {"all://": proxy} if proxy else None
         try:
-            with httpx.Client(headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 response = client.get(url)
         except Exception as exc:
             return "retry", f"Network error: {exc}"
@@ -32,14 +33,14 @@ class TokenManager:
             return "unauthorized", "Invalid Token"
         return "retry", f"HTTP {response.status_code}"
 
-    def validate_token(self, token):
-        """Validate token and return username."""
-        status, info = self._fetch_token_info(token)
-        if status == "ok":
-            return True, info
+    def validate_token(self, token, proxy=None):
+        """Validate token and return status + info."""
+        status, info = self._fetch_token_info(token, proxy)
         if status == "unauthorized":
-            return False, "Invalid Token"
-        return False, f"Temporary error ({info}). Try again."
+            return "unauthorized", "Invalid Token"
+        if status == "ok":
+            return "ok", info
+        return "retry", info
 
     def check_all_accounts(self):
         self.log("[Checker] Rozpoczynam weryfikację bazy tokenów...")
@@ -47,9 +48,9 @@ class TokenManager:
         
         valid_count = 0
         for acc in accounts:
-            acc_id, _, token, _, _, _, _, _, _, _, _ = acc
+            acc_id, _, token, proxy, _, _, _, _, _, _, _ = acc
 
-            status, info = self._fetch_token_info(token)
+            status, info = self._fetch_token_info(token, proxy)
             attempts = 0
             while status == "retry" and attempts < self.max_validation_retries:
                 attempts += 1

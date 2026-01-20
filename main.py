@@ -52,6 +52,8 @@ class MassDMApp(ctk.CTk):
         self.error_entries = []
         self.max_log_entries = 2000
         self.max_error_entries = 2000
+        self.unverified_retry_delay_seconds = 60
+        self.max_unverified_retries = 3
         self.log_filter_var = ctk.StringVar()
         self.error_filter_var = ctk.StringVar()
         self.log_level_var = ctk.StringVar(value="All")
@@ -640,20 +642,89 @@ class MassDMApp(ctk.CTk):
         if dm_limit <= 0 or join_limit <= 0:
             self.log_error("Limity muszÄ… byÄ‡ wiÄ™ksze od zera.")
             return
-        is_valid, info = self.token_manager.validate_token(token)
-        if not is_valid:
-            self.log_error(f"Token niepoprawny: {info}.")
+        self.add_acc_btn.configure(state="disabled")
+        thread = threading.Thread(
+            target=self._add_account_worker,
+            args=(token, proxy, dm_limit, join_limit),
+            daemon=True,
+        )
+        thread.start()
+
+    def _add_account_worker(self, token, proxy, dm_limit, join_limit):
+        status, info = self.token_manager.validate_token(token, proxy)
+        self.after(
+            0,
+            lambda: self._handle_add_account_result(
+                token, proxy, dm_limit, join_limit, status, info
+            ),
+        )
+
+    def _handle_add_account_result(self, token, proxy, dm_limit, join_limit, status, info):
+        try:
+            if status == "unauthorized":
+                self.log_error(f"Token niepoprawny: {info}.")
+                return
+
+            initial_status = "Active" if status == "ok" else "Unverified"
+            account_id = self.db.add_account("discord", token, proxy, dm_limit, join_limit, initial_status)
+            if not account_id:
+                self.log_error("Konto juĹĽ istnieje lub token jest niepoprawny.")
+                return
+
+            if status == "ok":
+                self.add_log(f"Account added: {info}. DM limit: {dm_limit}, Join limit: {join_limit}.")
+            else:
+                self.add_log(
+                    f"Account added: temporary validation error ({info}). Marked as Unverified."
+                )
+                self._schedule_account_recheck(account_id, token, proxy, attempt=1)
+
+            self._reset_add_account_form()
+            self.refresh_accounts_overview()
+        finally:
+            self.add_acc_btn.configure(state="normal")
+
+    def _schedule_account_recheck(self, account_id, token, proxy, attempt=1):
+        if attempt > self.max_unverified_retries:
+            self.add_log(f"[Accounts] Konto {account_id}: nadal niezweryfikowane, koniec prob.")
             return
-        if self.db.add_account("discord", token, proxy, dm_limit, join_limit):
-            self.add_log(f"Account added: {info}. DM limit: {dm_limit}, Join limit: {join_limit}.")
-            self.token_input.delete(0, 'end')
-            self.proxy_input.delete(0, 'end')
-            self.dm_limit_input.delete(0, 'end')
-            self.dm_limit_input.insert(0, "15")
-            self.join_limit_input.delete(0, 'end')
-            self.join_limit_input.insert(0, "5")
-        else:
-            self.log_error("Konto juĹĽ istnieje lub token jest niepoprawny.")
+        timer = threading.Timer(
+            self.unverified_retry_delay_seconds,
+            self._run_account_recheck,
+            args=(account_id, token, proxy, attempt),
+        )
+        timer.daemon = True
+        timer.start()
+
+    def _run_account_recheck(self, account_id, token, proxy, attempt):
+        status, info = self.token_manager.validate_token(token, proxy)
+        self.after(
+            0,
+            lambda: self._handle_account_recheck_result(account_id, status, info, token, proxy, attempt),
+        )
+
+    def _handle_account_recheck_result(self, account_id, status, info, token, proxy, attempt):
+        if status == "ok":
+            self.db.update_account_status(account_id, "Active")
+            self.add_log(f"[Accounts] Konto {account_id} zweryfikowane: {info}.")
+            self.refresh_accounts_overview()
+            return
+        if status == "unauthorized":
+            self.log_error(f"[Accounts] Konto {account_id} niepoprawne: {info}. Usuwam.")
+            self.db.update_account_status(account_id, "Banned/Dead")
+            self.db.remove_account(account_id)
+            self.refresh_accounts_overview()
+            return
+        self.add_log(f"[Accounts] Konto {account_id}: weryfikacja odroczona ({info}).")
+        self._schedule_account_recheck(account_id, token, proxy, attempt=attempt + 1)
+
+    def _reset_add_account_form(self):
+        self.token_input.delete(0, "end")
+        self.proxy_input.delete(0, "end")
+        self.dm_limit_input.delete(0, "end")
+        self.dm_limit_input.insert(0, "15")
+        self.join_limit_input.delete(0, "end")
+        self.join_limit_input.insert(0, "5")
 
     def _get_invite_list(self):
         raw_text = self.invite_input.get("1.0", "end")

@@ -146,7 +146,7 @@ class DatabaseManager:
             encrypted = self._encrypt_token(token)
             cursor.execute("UPDATE accounts SET token = ? WHERE id = ?", (encrypted, acc_id))
 
-    def add_account(self, platform, token, proxy="", limit=15, join_limit=5):
+    def add_account(self, platform, token, proxy="", limit=15, join_limit=5, status="Active"):
         conn = None
         try:
             with self.write_lock:
@@ -154,13 +154,13 @@ class DatabaseManager:
                 cursor = conn.cursor()
                 encrypted_token = self._encrypt_token(token)
                 cursor.execute('''
-                    INSERT INTO accounts (platform, token, proxy, daily_limit, join_daily_limit)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (platform, encrypted_token, proxy, limit, join_limit))
+                    INSERT INTO accounts (platform, token, proxy, status, daily_limit, join_daily_limit)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (platform, encrypted_token, proxy, status, limit, join_limit))
                 conn.commit()
-                return True
+                return cursor.lastrowid
         except sqlite3.IntegrityError:
-            return False
+            return None
         finally:
             if conn:
                 conn.close()
@@ -411,6 +411,5 @@ class DatabaseManager:
         if isinstance(value, str) and value.startswith("enc:"):
             return self._decrypt_token(value)
         return value
-
 
 
