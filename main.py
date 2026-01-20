@@ -235,6 +235,13 @@ class MassDMApp(ctk.CTk):
 
         self.after(100, self.process_log_queue)
         self.after(1000, self.refresh_health_metrics)
+        self.account_status_colors = {
+            "active": "#2ecc71",
+            "unverified": "#f39c12",
+            "banned": "#e74c3c",
+            "dead": "#e74c3c",
+            "banned/dead": "#e74c3c",
+        }
 
     def add_log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1496,12 +1503,30 @@ class MassDMApp(ctk.CTk):
             self.acc_overview_box.insert("end", "No accounts in database.\n")
             self.refresh_workflow_status()
             return
+        self.acc_overview_box.tag_config("status_active", foreground=self.account_status_colors["active"])
+        self.acc_overview_box.tag_config("status_unverified", foreground=self.account_status_colors["unverified"])
+        self.acc_overview_box.tag_config("status_banned", foreground=self.account_status_colors["banned"])
         self.acc_overview_box.insert("end", "ID | Status | DM sent/limit | Join sent/limit | Proxy\n")
         self.acc_overview_box.insert("end", "-" * 70 + "\n")
         for acc_id, status, proxy, dm_limit, sent_today, join_limit, join_today in accounts:
             proxy_value = proxy if proxy else "-"
             line = f"{acc_id} | {status} | {sent_today}/{dm_limit} | {join_today}/{join_limit} | {proxy_value}\n"
-            self.acc_overview_box.insert("end", line)
+            status_key = (status or "").strip().casefold()
+            if status_key == "active":
+                tag = "status_active"
+            elif status_key == "unverified":
+                tag = "status_unverified"
+            elif status_key in {"banned", "dead", "banned/dead"}:
+                tag = "status_banned"
+            else:
+                tag = None
+            if tag:
+                start_index = self.acc_overview_box.index("end-1c")
+                self.acc_overview_box.insert("end", line)
+                end_index = self.acc_overview_box.index("end-1c")
+                self.acc_overview_box.tag_add(tag, start_index, end_index)
+            else:
+                self.acc_overview_box.insert("end", line)
         self.refresh_workflow_status()
 
     def reset_account_counters(self):
@@ -1878,13 +1903,18 @@ class MassDMApp(ctk.CTk):
         self.acc_overview_frame = ctk.CTkFrame(parent)
         self.acc_overview_frame.pack(fill="x", pady=10)
         ctk.CTkLabel(self.acc_overview_frame, text="Account Counters & Status", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        self.acc_status_legend = ctk.CTkFrame(self.acc_overview_frame, fg_color="transparent")
+        self.acc_status_legend.grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="w")
+        ctk.CTkLabel(self.acc_status_legend, text="Active", text_color=self.account_status_colors["active"]).pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(self.acc_status_legend, text="Unverified", text_color=self.account_status_colors["unverified"]).pack(side="left", padx=(0, 12))
+        ctk.CTkLabel(self.acc_status_legend, text="Banned/Dead", text_color=self.account_status_colors["banned"]).pack(side="left")
         self.acc_overview_box = ctk.CTkTextbox(self.acc_overview_frame, height=120)
-        self.acc_overview_box.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+        self.acc_overview_box.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
         self.acc_overview_frame.grid_columnconfigure(0, weight=1)
         self.acc_refresh_btn = ctk.CTkButton(self.acc_overview_frame, text="Refresh Accounts", command=self.refresh_accounts_overview)
-        self.acc_refresh_btn.grid(row=1, column=1, padx=10, pady=5)
+        self.acc_refresh_btn.grid(row=2, column=1, padx=10, pady=5)
         self.acc_reset_btn = ctk.CTkButton(self.acc_overview_frame, text="Reset Counters", fg_color="#f39c12", hover_color="#d35400", command=self.reset_account_counters)
-        self.acc_reset_btn.grid(row=2, column=1, padx=10, pady=5)
+        self.acc_reset_btn.grid(row=3, column=1, padx=10, pady=5)
 
         self.module_frame = ctk.CTkFrame(parent)
         self.module_frame.pack(fill="x", pady=10)

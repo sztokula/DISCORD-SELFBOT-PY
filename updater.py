@@ -162,6 +162,7 @@ class UpdateManager:
             archive.extract(member, extract_dir)
 
     def _create_staging_root(self) -> Path:
+        """Deprecated: previous update flow staged full app copies before swap."""
         staging_root = Path(tempfile.mkdtemp(dir=self.app_root.parent, prefix=".update_staging_"))
         shutil.copytree(self.app_root, staging_root, dirs_exist_ok=True)
         return staging_root
@@ -180,6 +181,7 @@ class UpdateManager:
         return True
 
     def _swap_staged_root(self, staging_root: Path) -> None:
+        """Deprecated: previous update flow swapped full app directories in place."""
         backup_root = self.app_root.with_name(self.app_root.name + ".backup")
         if backup_root.exists():
             raise UpdateError(f"Backup directory already exists: {backup_root}.")
