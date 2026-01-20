@@ -1,10 +1,13 @@
 import customtkinter as ctk
+import json
 import queue
 import re
 import threading
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog
+from urllib import request
+from urllib.error import URLError
 from urllib.parse import urlparse
 from database import DatabaseManager
 from captcha_solver import CaptchaSolver
@@ -16,6 +19,8 @@ from token_manager import TokenManager
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
+
+APP_VERSION = "1.0"
 
 class MassDMApp(ctk.CTk):
     def __init__(self):
@@ -48,12 +53,13 @@ class MassDMApp(ctk.CTk):
         self.error_log_file_path = self.logs_dir / f"errors_{datetime.now().strftime('%Y%m%d')}.log"
         self.banlist_path = Path("banned_dead_tokens.txt")
 
-        self.title("Mass-DM Farm Tool Pro v1.0")
+        self.title(f"Mass-DM Farm Tool Pro v{APP_VERSION}")
         self.geometry("1100x1000") # Zwiększona wysokość na nową sekcję
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
         self.settings_window = None
+        self.version_status_var = ctk.StringVar(value="Last check: --")
 
         # --- SIDEBAR ---
         self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
@@ -200,6 +206,80 @@ class MassDMApp(ctk.CTk):
             self.log_error(f"{label} min nie może być większy od max.")
             return None
         return min_val, max_val
+
+    def _normalize_version(self, version_value):
+        if not version_value:
+            return ()
+        parts = re.findall(r"\d+", str(version_value))
+        return tuple(int(part) for part in parts)
+
+    def _compare_versions(self, current_version, latest_version):
+        current_parts = self._normalize_version(current_version)
+        latest_parts = self._normalize_version(latest_version)
+        if not current_parts or not latest_parts:
+            return None
+        max_len = max(len(current_parts), len(latest_parts))
+        current_parts = current_parts + (0,) * (max_len - len(current_parts))
+        latest_parts = latest_parts + (0,) * (max_len - len(latest_parts))
+        if current_parts == latest_parts:
+            return 0
+        return 1 if current_parts > latest_parts else -1
+
+    def _set_version_status(self, text):
+        self.version_status_var.set(text)
+
+    def save_version_settings(self):
+        endpoint = self.version_endpoint_input.get().strip()
+        if endpoint:
+            self.db.set_setting("version_endpoint", endpoint)
+            self.add_log("[Settings] Zapisano endpoint wersji.")
+        else:
+            self.db.set_setting("version_endpoint", None)
+            self.add_log("[Settings] Usunięto endpoint wersji.")
+
+    def check_for_updates(self):
+        endpoint = self.version_endpoint_input.get().strip()
+        if not endpoint:
+            self.log_error("Endpoint wersji jest pusty. Uzupełnij go w ustawieniach.")
+            return
+        self.db.set_setting("version_endpoint", endpoint)
+        self.add_log("[Updater] Sprawdzanie najnowszej wersji...")
+        threading.Thread(
+            target=self._check_for_updates_worker,
+            args=(endpoint,),
+            daemon=True,
+        ).start()
+
+    def _check_for_updates_worker(self, endpoint):
+        try:
+            with request.urlopen(endpoint, timeout=10) as response:
+                payload = response.read().decode("utf-8")
+            data = json.loads(payload)
+        except (URLError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            self.add_log(f"[Updater] Nie udało się pobrać wersji: {exc}")
+            self.after(0, lambda: self._set_version_status("Last check: error"))
+            return
+
+        latest = data.get("latest_version") or data.get("version")
+        download_url = data.get("download_url") or data.get("url")
+        if not latest:
+            self.add_log("[Updater] Brak pola latest_version/version w odpowiedzi.")
+            self.after(0, lambda: self._set_version_status("Last check: invalid response"))
+            return
+
+        comparison = self._compare_versions(APP_VERSION, latest)
+        if comparison is None:
+            message = f"[Updater] Bieżąca wersja: {APP_VERSION}, najnowsza: {latest}."
+        elif comparison < 0:
+            message = f"[Updater] Dostępna aktualizacja: {latest} (obecnie {APP_VERSION})."
+        elif comparison == 0:
+            message = f"[Updater] Masz najnowszą wersję ({APP_VERSION})."
+        else:
+            message = f"[Updater] Wersja lokalna ({APP_VERSION}) jest nowsza niż {latest}."
+        if download_url:
+            message += f" Link: {download_url}"
+        self.add_log(message)
+        self.after(0, lambda: self._set_version_status(f"Last check: {latest}"))
 
     def validate_token_format(self, token):
         if not token:
@@ -892,6 +972,23 @@ class MassDMApp(ctk.CTk):
         self.captcha_test_btn = ctk.CTkButton(self.captcha_frame, text="Test API", fg_color="#16a085", command=self.test_captcha_settings)
         self.captcha_test_btn.grid(row=2, column=1, padx=10, pady=5)
         self._load_captcha_settings()
+
+        self.version_frame = ctk.CTkFrame(parent)
+        self.version_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(self.version_frame, text="Version Checker", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        ctk.CTkLabel(self.version_frame, text=f"Current version: {APP_VERSION}").grid(row=1, column=0, columnspan=2, pady=(0, 5))
+        ctk.CTkLabel(self.version_frame, text="Latest version endpoint (JSON)").grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.version_endpoint_input = ctk.CTkEntry(self.version_frame, width=450, placeholder_text="https://example.com/version.json")
+        self.version_endpoint_input.grid(row=2, column=1, padx=10, pady=5, sticky="w")
+        stored_endpoint = self.db.get_setting("version_endpoint", "")
+        if stored_endpoint:
+            self.version_endpoint_input.insert(0, stored_endpoint)
+        self.version_save_btn = ctk.CTkButton(self.version_frame, text="Save Endpoint", command=self.save_version_settings)
+        self.version_save_btn.grid(row=3, column=0, padx=10, pady=10, sticky="w")
+        self.version_check_btn = ctk.CTkButton(self.version_frame, text="Check Now", fg_color="#3498db", command=self.check_for_updates)
+        self.version_check_btn.grid(row=3, column=1, padx=10, pady=10, sticky="w")
+        self.version_status_label = ctk.CTkLabel(self.version_frame, textvariable=self.version_status_var, text_color="#8a8a8a")
+        self.version_status_label.grid(row=4, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="w")
 
         self.target_frame = ctk.CTkFrame(parent)
         self.target_frame.pack(fill="x", pady=10)
