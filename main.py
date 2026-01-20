@@ -4,6 +4,7 @@ import re
 import threading
 from datetime import datetime
 from pathlib import Path
+from tkinter import filedialog
 from urllib.parse import urlparse
 from database import DatabaseManager
 from captcha_solver import CaptchaSolver
@@ -426,6 +427,28 @@ class MassDMApp(ctk.CTk):
         self.target_input.delete("1.0", "end")
         self.refresh_targets_overview()
 
+    def import_targets_from_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Wybierz plik .txt z ID",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+        try:
+            content = Path(file_path).read_text(encoding="utf-8")
+        except OSError as exc:
+            self.log_error(f"Nie można odczytać pliku: {exc}")
+            return
+        ids, invalid = self._parse_user_ids(content)
+        if not ids:
+            self.log_error("Brak poprawnych ID w pliku.")
+            return
+        if invalid:
+            self.log_error(f"Niepoprawne ID (pomijam): {', '.join(invalid)}")
+        self.db.add_targets(ids, "discord")
+        self.add_log(f"[Targets] Zaimportowano {len(ids)} celów z pliku.")
+        self.refresh_targets_overview()
+
     def clear_targets(self):
         self.db.clear_targets()
         self.add_log("[Targets] Lista celów wyczyszczona.")
@@ -584,6 +607,8 @@ class MassDMApp(ctk.CTk):
         self.target_frame.grid_columnconfigure(0, weight=1)
         self.target_add_btn = ctk.CTkButton(self.target_frame, text="Add Targets", command=self.add_targets_from_input)
         self.target_add_btn.grid(row=1, column=1, padx=10, pady=5)
+        self.target_import_btn = ctk.CTkButton(self.target_frame, text="Import z pliku (.txt)", command=self.import_targets_from_file)
+        self.target_import_btn.grid(row=1, column=2, padx=10, pady=5)
         self.target_clear_btn = ctk.CTkButton(self.target_frame, text="Clear List", fg_color="#e67e22", command=self.clear_targets)
         self.target_clear_btn.grid(row=2, column=1, padx=10, pady=5)
         self.target_refresh_btn = ctk.CTkButton(self.target_frame, text="Refresh List", command=self.refresh_targets_overview)
