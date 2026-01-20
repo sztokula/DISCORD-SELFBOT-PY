@@ -98,3 +98,16 @@
 [2026-01-20 15:40:46] [Status] Next update in 3.00h.
 [2026-01-20 15:40:46] [Status] Auto status updater is already running.
 [2026-01-20 15:40:51] [Status] Automatyczna zmiana statusu zatrzymana.
+[2026-01-20 15:42:10] Error: Enter an account ID to remove.
+[2026-01-20 15:43:06] [Status] Starting automatic status update.
+[2026-01-20 15:43:06] [Accounts] Invalid token encryption key.
+[2026-01-20 15:43:06] [Accounts] Skipping account 1 - invalid encryption key.
+[2026-01-20 15:43:06] [Accounts] Invalid token encryption key.
+[2026-01-20 15:43:06] [Accounts] Skipping account 2 - invalid encryption key.
+[2026-01-20 15:43:06] [Accounts] Invalid token encryption key.
+[2026-01-20 15:43:06] [Accounts] Skipping account 3 - invalid encryption key.
+[2026-01-20 15:43:06] [Accounts] Invalid token encryption key.
+[2026-01-20 15:43:06] [Accounts] Skipping account 4 - invalid encryption key.
+[2026-01-20 15:43:06] [Status] No active accounts to update status.
+[2026-01-20 15:43:06] [Status] Next update in 3.00h.
+[2026-01-20 15:43:21] [Status] Automatyczna zmiana statusu zatrzymana.

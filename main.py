@@ -72,6 +72,7 @@ class MassDMApp(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
         self.settings_window = None
+        self._settings_scroll_fix_bound = False
         self.version_status_var = ctk.StringVar(value="Last check: --")
         self.update_status_var = ctk.StringVar(value="Update: --")
         self.update_info = None
@@ -1125,10 +1126,27 @@ class MassDMApp(ctk.CTk):
         )
         thread.daemon = True
         thread.start()
+        self._update_auto_status_label()
 
     def stop_status_update(self):
         self.status_changer.stop()
         self.add_log("[Status] Automatyczna zmiana statusu zatrzymana.")
+        self._update_auto_status_label()
+
+    def _update_auto_status_label(self):
+        if not hasattr(self, "status_state_label") or not self.status_state_label.winfo_exists():
+            return
+        running = bool(self.status_changer.auto_running)
+        if running:
+            text = "Auto status: running"
+            color = "#2ecc71"
+        elif not self.module_vars["status"].get():
+            text = "Auto status: disabled"
+            color = "#e67e22"
+        else:
+            text = "Auto status: stopped"
+            color = "#8a8a8a"
+        self.status_state_label.configure(text=text, text_color=color)
 
     def start_mission(self):
         if not self.module_vars["dm"].get():
@@ -1420,6 +1438,7 @@ class MassDMApp(ctk.CTk):
             self.captcha_key_input.configure(state="normal" if captcha_enabled else "disabled")
         if hasattr(self, "workflow_stage"):
             self._set_workflow_stage(self.workflow_stage)
+        self._update_auto_status_label()
 
     def open_settings_window(self):
         if self.settings_window and self.settings_window.winfo_exists():
@@ -1433,6 +1452,7 @@ class MassDMApp(ctk.CTk):
         self.settings_container = ctk.CTkScrollableFrame(self.settings_window, fg_color="transparent")
         self.settings_container.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
         self._build_settings_sections(self.settings_container)
+        self._install_settings_scroll_fix()
         self.settings_loaded = True
         self.refresh_workflow_status()
         self.settings_window.protocol("WM_DELETE_WINDOW", self.close_settings_window)
@@ -1444,6 +1464,27 @@ class MassDMApp(ctk.CTk):
             self.settings_window.destroy()
             self.refresh_workflow_status()
         self.settings_window = None
+
+    def _install_settings_scroll_fix(self):
+        if self._settings_scroll_fix_bound:
+            return
+        self.bind_all("<MouseWheel>", self._settings_scroll_fix, add="+")
+        self._settings_scroll_fix_bound = True
+
+    def _settings_scroll_fix(self, event):
+        if not (self.settings_window and self.settings_window.winfo_exists()):
+            return
+        container = getattr(self, "settings_container", None)
+        if not container:
+            return
+        canvas = getattr(container, "_parent_canvas", None)
+        if not canvas:
+            return
+        try:
+            if container.check_if_master_is_canvas(event.widget):
+                canvas.update_idletasks()
+        except Exception:
+            return
 
     def save_delay_settings(self):
         dm_delay = self._parse_delay_range(
@@ -1791,6 +1832,13 @@ class MassDMApp(ctk.CTk):
         self.update_status_btn.grid(row=2, column=0, pady=10, sticky="w")
         self.stop_status_btn = ctk.CTkButton(self.status_frame, text="Stop Auto Status", fg_color="#c0392b", command=self.stop_status_update)
         self.stop_status_btn.grid(row=2, column=1, pady=10, sticky="e")
+        self.status_state_label = ctk.CTkLabel(
+            self.status_frame,
+            text="Auto status: stopped",
+            text_color="#8a8a8a",
+            anchor="w",
+        )
+        self.status_state_label.grid(row=3, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="w")
 
         # 5. SEKCJA SCRAPERA
         self.scrape_frame = ctk.CTkFrame(parent)
