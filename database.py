@@ -235,11 +235,77 @@ class DatabaseManager:
             conn.commit()
             conn.close()
 
+    def get_accounts_overview(self):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, status, proxy, daily_limit, sent_today, join_daily_limit, join_today
+            FROM accounts
+            ORDER BY id ASC
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+
+    def reset_account_counters(self):
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE accounts
+                SET sent_today = 0,
+                    join_today = 0,
+                    last_use = NULL,
+                    join_last_use = NULL
+            ''')
+            conn.commit()
+            conn.close()
+
     def remove_account(self, account_id):
         with self.write_lock:
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+            conn.commit()
+            conn.close()
+
+    def get_target_counts(self):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT status, COUNT(*) FROM targets GROUP BY status')
+        rows = cursor.fetchall()
+        cursor.execute('SELECT COUNT(*) FROM targets')
+        total = cursor.fetchone()[0]
+        conn.close()
+        counts = {status: count for status, count in rows}
+        return counts, total
+
+    def get_targets(self, limit=50):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT user_id, status
+            FROM targets
+            ORDER BY id DESC
+            LIMIT ?
+        ''', (limit,))
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+
+    def remove_target(self, user_id):
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM targets WHERE user_id = ?", (user_id,))
+            conn.commit()
+            conn.close()
+
+    def clear_targets(self):
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM targets")
             conn.commit()
             conn.close()
 

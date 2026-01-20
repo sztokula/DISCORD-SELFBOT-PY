@@ -20,6 +20,13 @@ class MassDMApp(ctk.CTk):
         
         self.db = DatabaseManager()
         self.db.reset_daily_counters()
+        self.module_vars = {
+            "dm": ctk.BooleanVar(value=self._get_setting_bool("module_dm", True)),
+            "joiner": ctk.BooleanVar(value=self._get_setting_bool("module_joiner", True)),
+            "scraper": ctk.BooleanVar(value=self._get_setting_bool("module_scraper", True)),
+            "status": ctk.BooleanVar(value=self._get_setting_bool("module_status", True)),
+            "captcha": ctk.BooleanVar(value=self._get_setting_bool("module_captcha", True)),
+        }
         self.log_queue = queue.Queue()
         self.worker = DiscordWorker(self.db, self.add_log)
         self.scraper = DiscordScraper(self.db, self.add_log)
@@ -89,6 +96,17 @@ class MassDMApp(ctk.CTk):
 
     def log_error(self, message):
         self.add_log(f"Błąd: {message}")
+
+    def _get_setting_bool(self, key, default=True):
+        value = self.db.get_setting(key, None)
+        if value in (None, ""):
+            return default
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _set_setting_bool(self, key, value):
+        self.db.set_setting(key, "true" if value else "false")
 
     def validate_token_format(self, token):
         if not token:
@@ -201,6 +219,9 @@ class MassDMApp(ctk.CTk):
         return normalized
 
     def start_joining(self):
+        if not self.module_vars["joiner"].get():
+            self.log_error("Moduł Joiner jest wyłączony.")
+            return
         invites = self._get_invite_list()
         if not invites:
             self.log_error("Brak poprawnych zaproszeń.")
@@ -210,6 +231,9 @@ class MassDMApp(ctk.CTk):
         thread.start()
 
     def start_scraping(self):
+        if not self.module_vars["scraper"].get():
+            self.log_error("Moduł Scraper jest wyłączony.")
+            return
         token = self.token_input.get().strip()
         channel_id = self.scrape_channel_input.get().strip()
         if not self.validate_token_format(token):
@@ -221,6 +245,9 @@ class MassDMApp(ctk.CTk):
         thread.start()
 
     def start_status_update(self):
+        if not self.module_vars["status"].get():
+            self.log_error("Moduł Status jest wyłączony.")
+            return
         status_type = self.status_type_var.get()
         custom_text = self.status_text_input.get()
         interval_raw = self.status_interval_input.get().strip()
@@ -244,6 +271,9 @@ class MassDMApp(ctk.CTk):
         self.add_log("[Status] Automatyczna zmiana statusu zatrzymana.")
 
     def start_mission(self):
+        if not self.module_vars["dm"].get():
+            self.log_error("Moduł DM jest wyłączony.")
+            return
         raw = self.msg_input.get("1.0", "end").strip()
         if not raw:
             self.log_error("Pusta wiadomość.")
@@ -263,6 +293,112 @@ class MassDMApp(ctk.CTk):
         self.status_changer.stop()
         self.joiner.stop()
         self.add_log("All processes stopped.")
+
+    def remove_account_by_id(self):
+        raw_id = self.remove_account_input.get().strip()
+        if not raw_id:
+            self.log_error("Podaj ID konta do usunięcia.")
+            return
+        try:
+            account_id = int(raw_id)
+        except ValueError:
+            self.log_error("ID konta musi być liczbą.")
+            return
+        self.db.remove_account(account_id)
+        self.add_log(f"[Accounts] Usunięto konto {account_id}.")
+        self.remove_account_input.delete(0, "end")
+        self.refresh_accounts_overview()
+
+    def refresh_accounts_overview(self):
+        accounts = self.db.get_accounts_overview()
+        self.acc_overview_box.delete("1.0", "end")
+        if not accounts:
+            self.acc_overview_box.insert("end", "Brak kont w bazie.\n")
+            return
+        self.acc_overview_box.insert("end", "ID | Status | DM sent/limit | Join sent/limit | Proxy\n")
+        self.acc_overview_box.insert("end", "-" * 70 + "\n")
+        for acc_id, status, proxy, dm_limit, sent_today, join_limit, join_today in accounts:
+            proxy_value = proxy if proxy else "-"
+            line = f"{acc_id} | {status} | {sent_today}/{dm_limit} | {join_today}/{join_limit} | {proxy_value}\n"
+            self.acc_overview_box.insert("end", line)
+
+    def reset_account_counters(self):
+        self.db.reset_account_counters()
+        self.add_log("[Accounts] Zresetowano liczniki dzienne.")
+        self.refresh_accounts_overview()
+
+    def _parse_user_ids(self, raw_text):
+        ids = []
+        invalid = []
+        for line in raw_text.splitlines():
+            value = line.strip()
+            if not value:
+                continue
+            if re.match(r"^\d{17,20}$", value):
+                ids.append(value)
+            else:
+                invalid.append(value)
+        return ids, invalid
+
+    def add_targets_from_input(self):
+        raw = self.target_input.get("1.0", "end")
+        ids, invalid = self._parse_user_ids(raw)
+        if not ids:
+            self.log_error("Brak poprawnych ID do dodania.")
+            return
+        if invalid:
+            self.log_error(f"Niepoprawne ID (pomijam): {', '.join(invalid)}")
+        self.db.add_targets(ids, "discord")
+        self.add_log(f"[Targets] Dodano {len(ids)} celów.")
+        self.target_input.delete("1.0", "end")
+        self.refresh_targets_overview()
+
+    def clear_targets(self):
+        self.db.clear_targets()
+        self.add_log("[Targets] Lista celów wyczyszczona.")
+        self.refresh_targets_overview()
+
+    def refresh_targets_overview(self):
+        counts, total = self.db.get_target_counts()
+        pending = counts.get("Pending", 0)
+        sent = counts.get("Sent", 0)
+        failed = counts.get("Failed", 0)
+        self.target_summary_label.configure(
+            text=f"Targets: {total} | Pending: {pending} | Sent: {sent} | Failed: {failed}"
+        )
+        targets = self.db.get_targets(limit=50)
+        self.target_overview_box.delete("1.0", "end")
+        if not targets:
+            self.target_overview_box.insert("end", "Brak celów w bazie.\n")
+            return
+        for user_id, status in targets:
+            self.target_overview_box.insert("end", f"{user_id} | {status}\n")
+
+    def on_module_toggle(self):
+        self._set_setting_bool("module_dm", self.module_vars["dm"].get())
+        self._set_setting_bool("module_joiner", self.module_vars["joiner"].get())
+        self._set_setting_bool("module_scraper", self.module_vars["scraper"].get())
+        self._set_setting_bool("module_status", self.module_vars["status"].get())
+        self._set_setting_bool("module_captcha", self.module_vars["captcha"].get())
+        self.apply_module_states()
+
+    def apply_module_states(self):
+        dm_enabled = self.module_vars["dm"].get()
+        joiner_enabled = self.module_vars["joiner"].get()
+        scraper_enabled = self.module_vars["scraper"].get()
+        status_enabled = self.module_vars["status"].get()
+        captcha_enabled = self.module_vars["captcha"].get()
+
+        self.start_btn.configure(state="normal" if dm_enabled else "disabled")
+        self.friend_request_toggle.configure(state="normal" if dm_enabled else "disabled")
+        self.join_btn.configure(state="normal" if joiner_enabled else "disabled")
+        self.scrape_btn.configure(state="normal" if scraper_enabled else "disabled")
+        self.update_status_btn.configure(state="normal" if status_enabled else "disabled")
+        self.stop_status_btn.configure(state="normal" if status_enabled else "disabled")
+        self.captcha_save_btn.configure(state="normal" if captcha_enabled else "disabled")
+        self.captcha_test_btn.configure(state="normal" if captcha_enabled else "disabled")
+        self.captcha_provider.configure(state="normal" if captcha_enabled else "disabled")
+        self.captcha_key_input.configure(state="normal" if captcha_enabled else "disabled")
 
     def open_settings_window(self):
         if self.settings_window and self.settings_window.winfo_exists():
@@ -300,6 +436,35 @@ class MassDMApp(ctk.CTk):
         self.join_limit_input.insert(0, "5")
         self.add_acc_btn = ctk.CTkButton(self.acc_frame, text="Add Account", command=self.add_account)
         self.add_acc_btn.grid(row=1, column=1, rowspan=4, padx=10, pady=5, sticky="ns")
+        self.remove_account_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Account ID to remove", width=350)
+        self.remove_account_input.grid(row=5, column=0, padx=10, pady=5)
+        self.remove_account_btn = ctk.CTkButton(self.acc_frame, text="Remove Account", fg_color="#e74c3c", command=self.remove_account_by_id)
+        self.remove_account_btn.grid(row=5, column=1, padx=10, pady=5)
+
+        self.acc_overview_frame = ctk.CTkFrame(parent)
+        self.acc_overview_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(self.acc_overview_frame, text="Account Counters & Status", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        self.acc_overview_box = ctk.CTkTextbox(self.acc_overview_frame, height=120)
+        self.acc_overview_box.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+        self.acc_overview_frame.grid_columnconfigure(0, weight=1)
+        self.acc_refresh_btn = ctk.CTkButton(self.acc_overview_frame, text="Refresh Accounts", command=self.refresh_accounts_overview)
+        self.acc_refresh_btn.grid(row=1, column=1, padx=10, pady=5)
+        self.acc_reset_btn = ctk.CTkButton(self.acc_overview_frame, text="Reset Counters", fg_color="#f39c12", hover_color="#d35400", command=self.reset_account_counters)
+        self.acc_reset_btn.grid(row=2, column=1, padx=10, pady=5)
+
+        self.module_frame = ctk.CTkFrame(parent)
+        self.module_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(self.module_frame, text="Module Switches", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        self.dm_toggle = ctk.CTkCheckBox(self.module_frame, text="DM Module", variable=self.module_vars["dm"], command=self.on_module_toggle)
+        self.dm_toggle.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.joiner_toggle = ctk.CTkCheckBox(self.module_frame, text="Joiner Module", variable=self.module_vars["joiner"], command=self.on_module_toggle)
+        self.joiner_toggle.grid(row=1, column=1, padx=10, pady=5, sticky="w")
+        self.scraper_toggle = ctk.CTkCheckBox(self.module_frame, text="Scraper Module", variable=self.module_vars["scraper"], command=self.on_module_toggle)
+        self.scraper_toggle.grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.status_toggle = ctk.CTkCheckBox(self.module_frame, text="Status Module", variable=self.module_vars["status"], command=self.on_module_toggle)
+        self.status_toggle.grid(row=2, column=1, padx=10, pady=5, sticky="w")
+        self.captcha_toggle = ctk.CTkCheckBox(self.module_frame, text="Captcha Module", variable=self.module_vars["captcha"], command=self.on_module_toggle)
+        self.captcha_toggle.grid(row=3, column=0, padx=10, pady=5, sticky="w")
 
         # 2. SEKCJA JOINERA (NOWOŚĆ)
         self.joiner_frame = ctk.CTkFrame(parent)
@@ -331,6 +496,23 @@ class MassDMApp(ctk.CTk):
         self.captcha_test_btn.grid(row=2, column=1, padx=10, pady=5)
         self._load_captcha_settings()
 
+        self.target_frame = ctk.CTkFrame(parent)
+        self.target_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(self.target_frame, text="Target List Management", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=2, pady=10)
+        self.target_input = ctk.CTkTextbox(self.target_frame, height=100, width=350)
+        self.target_input.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
+        self.target_frame.grid_columnconfigure(0, weight=1)
+        self.target_add_btn = ctk.CTkButton(self.target_frame, text="Add Targets", command=self.add_targets_from_input)
+        self.target_add_btn.grid(row=1, column=1, padx=10, pady=5)
+        self.target_clear_btn = ctk.CTkButton(self.target_frame, text="Clear List", fg_color="#e67e22", command=self.clear_targets)
+        self.target_clear_btn.grid(row=2, column=1, padx=10, pady=5)
+        self.target_refresh_btn = ctk.CTkButton(self.target_frame, text="Refresh List", command=self.refresh_targets_overview)
+        self.target_refresh_btn.grid(row=3, column=1, padx=10, pady=5)
+        self.target_summary_label = ctk.CTkLabel(self.target_frame, text="Targets: 0", anchor="w")
+        self.target_summary_label.grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.target_overview_box = ctk.CTkTextbox(self.target_frame, height=100)
+        self.target_overview_box.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
+
         # 4. SEKCJA STATUSU
         self.status_frame = ctk.CTkFrame(parent)
         self.status_frame.pack(fill="x", pady=10)
@@ -357,6 +539,9 @@ class MassDMApp(ctk.CTk):
         self.scrape_channel_input.grid(row=1, column=0, padx=10, pady=5)
         self.scrape_btn = ctk.CTkButton(self.scrape_frame, text="Scrape Users", command=self.start_scraping)
         self.scrape_btn.grid(row=1, column=1, padx=10, pady=5)
+        self.refresh_accounts_overview()
+        self.refresh_targets_overview()
+        self.apply_module_states()
 
     def on_captcha_provider_change(self, _value=None):
         self._refresh_captcha_key()
