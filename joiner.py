@@ -160,10 +160,14 @@ class DiscordJoiner:
         auto_accept_rules=True,
         auto_onboarding=True,
         role_whitelist=None,
+        allowed_account_ids=None,
     ):
         self.is_running = True
         self.db.reset_daily_counters()
         accounts = self.db.get_active_accounts("discord")
+        if allowed_account_ids:
+            allowed_set = set(allowed_account_ids)
+            accounts = [acc for acc in accounts if acc[0] in allowed_set]
         joined_any = False
         pending_retries = []
         

@@ -128,8 +128,11 @@ class StatusChanger:
             self.log(f"[Status] Exception: {str(e)}")
             return False
 
-    def _update_all_accounts(self, status_type, custom_text, running_check):
+    def _update_all_accounts(self, status_type, custom_text, running_check, allowed_account_ids=None):
         accounts = self.db.get_active_accounts("discord")
+        if allowed_account_ids:
+            allowed_set = set(allowed_account_ids)
+            accounts = [acc for acc in accounts if acc[0] in allowed_set]
         
         if not accounts:
             self.log("[Status] No active accounts to update status.")
@@ -152,14 +155,26 @@ class StatusChanger:
             
         self.log("[Status] Status update finished.")
 
-    def update_all_accounts(self, status_type, custom_text):
+    def update_all_accounts(self, status_type, custom_text, allowed_account_ids=None):
         self.is_running = True
         try:
-            self._update_all_accounts(status_type, custom_text, running_check=lambda: self.is_running)
+            self._update_all_accounts(
+                status_type,
+                custom_text,
+                running_check=lambda: self.is_running,
+                allowed_account_ids=allowed_account_ids,
+            )
         finally:
             self.is_running = False
 
-    def run_auto_update(self, status_type, custom_text, delay_min_hours, delay_max_hours):
+    def run_auto_update(
+        self,
+        status_type,
+        custom_text,
+        delay_min_hours,
+        delay_max_hours,
+        allowed_account_ids=None,
+    ):
         if self.auto_running:
             self.log("[Status] Auto status updater is already running.")
             return
@@ -168,7 +183,12 @@ class StatusChanger:
         max_seconds = max(min_seconds, float(delay_max_hours) * 3600.0)
         while self.auto_running:
             self.log("[Status] Starting automatic status update.")
-            self._update_all_accounts(status_type, custom_text, running_check=lambda: self.auto_running)
+            self._update_all_accounts(
+                status_type,
+                custom_text,
+                running_check=lambda: self.auto_running,
+                allowed_account_ids=allowed_account_ids,
+            )
             if not self.auto_running:
                 break
             wait_seconds = random.uniform(min_seconds, max_seconds)

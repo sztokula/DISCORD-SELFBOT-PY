@@ -380,24 +380,48 @@ class MassDMApp(ctk.CTk):
             self._proxy_check_cache[proxy] = {"ok": ok, "err": err, "ts": now}
         return ok, err
 
+    def _is_proxy_format_valid(self, proxy):
+        if not proxy:
+            return False
+        parsed = urlparse(proxy)
+        if parsed.scheme and parsed.hostname and parsed.port:
+            return parsed.scheme in {"http", "https", "socks5"}
+        parsed = urlparse(f"http://{proxy}")
+        return bool(parsed.hostname and parsed.port)
+
     def _ensure_account_proxies(self, accounts, context_label):
         if not self._is_proxy_required():
-            return True
+            return accounts
         if not accounts:
             self.log_error(f"[Proxy] No accounts available for {context_label}.")
-            return False
-        for acc_id, _, _, proxy, _, _, _, _, _, _, _ in accounts:
+            return []
+        valid_accounts = []
+        failures = []
+        for acc in accounts:
+            acc_id, _, _, proxy, _, _, _, _, _, _, _ = acc
             if not proxy:
-                self.log_error(f"[Proxy] Account {acc_id}: proxy required.")
-                return False
-            if not self.validate_proxy(proxy):
-                self.log_error(f"[Proxy] Account {acc_id}: invalid proxy format.")
-                return False
+                failures.append((acc_id, "missing proxy"))
+                continue
+            if not self._is_proxy_format_valid(proxy):
+                failures.append((acc_id, "invalid proxy format"))
+                continue
             ok, err = self._check_proxy_alive(proxy)
             if not ok:
-                self.log_error(f"[Proxy] Account {acc_id}: {err}")
-                return False
-        return True
+                failures.append((acc_id, err))
+                continue
+            valid_accounts.append(acc)
+        if failures:
+            self.log_warning(
+                f"[Proxy] {context_label}: skipped {len(failures)} account(s) with bad proxy."
+            )
+            preview = "; ".join(f"{acc_id}: {reason}" for acc_id, reason in failures[:10])
+            suffix = "..." if len(failures) > 10 else ""
+            self.log_warning(f"[Proxy] {context_label} failures: {preview}{suffix}")
+            for acc_id, _reason in failures:
+                self.db.update_account_status(acc_id, "Unverified")
+        if not valid_accounts:
+            self.log_error(f"[Proxy] {context_label}: no accounts with working proxies.")
+        return valid_accounts
 
     def _ensure_scraper_proxy(self, proxy, context_label):
         if not self._is_proxy_required():
@@ -718,9 +742,22 @@ class MassDMApp(ctk.CTk):
                 self._set_input_valid(self.profile_avatar_input, False)
                 return
         self._set_input_valid(self.profile_avatar_input, True)
+        accounts = self.db.get_active_accounts("discord")
+        def _profile_with_proxy_check():
+            valid_accounts = self._ensure_account_proxies(accounts, "profile update")
+            if not valid_accounts:
+                return
+            allowed_ids = {acc[0] for acc in valid_accounts}
+            self.profile_updater.update_profiles(
+                base_name,
+                avatar_data,
+                change_name,
+                change_avatar,
+                append_suffix,
+                allowed_ids,
+            )
         thread = threading.Thread(
-            target=self.profile_updater.update_profiles,
-            args=(base_name, avatar_data, change_name, change_avatar, append_suffix),
+            target=_profile_with_proxy_check,
             daemon=True,
         )
         thread.start()
@@ -1676,10 +1713,12 @@ class MassDMApp(ctk.CTk):
         join_delay_max = int(round(self._hours_to_seconds(join_delay_max_h)))
         accounts = self.db.get_active_accounts("discord")
         def _join_with_proxy_check():
-            if not self._ensure_account_proxies(accounts, "join"):
+            valid_accounts = self._ensure_account_proxies(accounts, "join")
+            if not valid_accounts:
                 if on_complete:
                     on_complete(False)
                 return
+            allowed_ids = {acc[0] for acc in valid_accounts}
             self.joiner.run_mass_join(
                 invites,
                 join_delay_min,
@@ -1688,6 +1727,7 @@ class MassDMApp(ctk.CTk):
                 auto_accept_rules,
                 auto_onboarding,
                 role_whitelist,
+                allowed_ids,
             )
         thread = threading.Thread(target=_join_with_proxy_check)
         thread.daemon = True
@@ -1828,9 +1868,17 @@ class MassDMApp(ctk.CTk):
         self.db.set_setting("status_delay_max_hours", str(status_delay_max))
         accounts = self.db.get_active_accounts("discord")
         def _status_with_proxy_check():
-            if not self._ensure_account_proxies(accounts, "status update"):
+            valid_accounts = self._ensure_account_proxies(accounts, "status update")
+            if not valid_accounts:
                 return
-            self.status_changer.run_auto_update(status_type, custom_text, status_delay_min, status_delay_max)
+            allowed_ids = {acc[0] for acc in valid_accounts}
+            self.status_changer.run_auto_update(
+                status_type,
+                custom_text,
+                status_delay_min,
+                status_delay_max,
+                allowed_ids,
+            )
         thread = threading.Thread(
             target=_status_with_proxy_check,
         )
@@ -1959,8 +2007,10 @@ class MassDMApp(ctk.CTk):
             self.add_log("[Mission] Dry-run enabled. Messages will not be sent.")
         accounts = self.db.get_active_accounts("discord")
         def _mission_with_proxy_check():
-            if not self._ensure_account_proxies(accounts, "mission"):
+            valid_accounts = self._ensure_account_proxies(accounts, "mission")
+            if not valid_accounts:
                 return
+            allowed_ids = {acc[0] for acc in valid_accounts}
             self.worker.run_mission(
                 templates,
                 dm_delay_min,
@@ -1971,6 +2021,7 @@ class MassDMApp(ctk.CTk):
                 account_min_interval,
                 target_min_interval,
                 dry_run,
+                allowed_ids,
             )
         thread = threading.Thread(
             target=_mission_with_proxy_check,

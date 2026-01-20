@@ -55,8 +55,19 @@ class ProfileUpdater:
         encoded = base64.b64encode(data).decode("ascii")
         return f"data:{mime};base64,{encoded}", None
 
-    def update_profiles(self, base_name, avatar_data, change_name=True, change_avatar=True, append_suffix=True):
+    def update_profiles(
+        self,
+        base_name,
+        avatar_data,
+        change_name=True,
+        change_avatar=True,
+        append_suffix=True,
+        allowed_account_ids=None,
+    ):
         accounts = self.db.get_active_accounts("discord")
+        if allowed_account_ids:
+            allowed_set = set(allowed_account_ids)
+            accounts = [acc for acc in accounts if acc[0] in allowed_set]
         if not accounts:
             self.log("[Profile] No active accounts.")
             return
