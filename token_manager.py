@@ -38,5 +38,6 @@ class TokenManager:
             else:
                 self.log(f"[DEAD] Konto {acc_id}: {info}. Dezaktywuję w bazie.")
                 self.db.update_account_status(acc_id, "Banned/Dead")
+                self.db.remove_account(acc_id)
         
         self.log(f"[Checker] Zakończono. Aktywne: {valid_count}/{len(accounts)}")

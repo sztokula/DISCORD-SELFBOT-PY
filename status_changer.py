@@ -61,6 +61,7 @@ class StatusChanger:
             self.log(f"[Status] Token dla konta {account_id} nadal niepoprawny. Dezaktywuję konto.")
             if account_id is not None:
                 self.db.update_account_status(account_id, "Banned/Dead")
+                self.db.remove_account(account_id)
             return None, True
         new_token = self._refresh_token(account_id, current_token)
         if new_token:
@@ -69,6 +70,7 @@ class StatusChanger:
         self.log(f"[Status] Brak nowego tokenu dla konta {account_id}. Dezaktywuję konto.")
         if account_id is not None:
             self.db.update_account_status(account_id, "Banned/Dead")
+            self.db.remove_account(account_id)
         return None, True
 
     def change_status(self, account_id, token, status_type, custom_text, proxy=None):

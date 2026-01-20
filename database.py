@@ -235,6 +235,14 @@ class DatabaseManager:
             conn.commit()
             conn.close()
 
+    def remove_account(self, account_id):
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+            conn.commit()
+            conn.close()
+
     def set_setting(self, key, value):
         with self.write_lock:
             conn = self.get_connection()
