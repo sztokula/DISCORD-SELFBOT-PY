@@ -181,6 +181,15 @@ class MassDMApp(ctk.CTk):
             return False
         return True
 
+    def is_valid_guild_id(self, guild_id):
+        if not guild_id:
+            self.log_error("Niepoprawny Guild ID: puste pole.")
+            return False
+        if not re.match(r"^\d{17,20}$", guild_id):
+            self.log_error("Niepoprawny format Guild ID.")
+            return False
+        return True
+
     def process_log_queue(self):
         try:
             while True:
@@ -291,6 +300,20 @@ class MassDMApp(ctk.CTk):
         if not self.is_valid_channel_id(channel_id):
             return
         thread = threading.Thread(target=self.scraper.scrape_history, args=(token, channel_id, 500))
+        thread.daemon = True
+        thread.start()
+
+    def start_guild_scraping(self):
+        if not self.module_vars["scraper"].get():
+            self.log_error("Moduł Scraper jest wyłączony.")
+            return
+        token = self.token_input.get().strip()
+        guild_id = self.scrape_guild_input.get().strip()
+        if not self.validate_token_format(token):
+            return
+        if not self.is_valid_guild_id(guild_id):
+            return
+        thread = threading.Thread(target=self.scraper.scrape_guild_members, args=(token, guild_id, 1000))
         thread.daemon = True
         thread.start()
 
@@ -443,6 +466,7 @@ class MassDMApp(ctk.CTk):
         self.friend_request_toggle.configure(state="normal" if dm_enabled else "disabled")
         self.join_btn.configure(state="normal" if joiner_enabled else "disabled")
         self.scrape_btn.configure(state="normal" if scraper_enabled else "disabled")
+        self.scrape_guild_btn.configure(state="normal" if scraper_enabled else "disabled")
         self.update_status_btn.configure(state="normal" if status_enabled else "disabled")
         self.stop_status_btn.configure(state="normal" if status_enabled else "disabled")
         self.captcha_save_btn.configure(state="normal" if captcha_enabled else "disabled")
@@ -595,6 +619,15 @@ class MassDMApp(ctk.CTk):
         self.scrape_channel_input.grid(row=1, column=0, padx=10, pady=5)
         self.scrape_btn = ctk.CTkButton(self.scrape_frame, text="Scrape Users", command=self.start_scraping)
         self.scrape_btn.grid(row=1, column=1, padx=10, pady=5)
+        self.scrape_guild_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Guild ID", width=350)
+        self.scrape_guild_input.grid(row=2, column=0, padx=10, pady=5)
+        self.scrape_guild_btn = ctk.CTkButton(
+            self.scrape_frame,
+            text="Scrape Guild Members",
+            fg_color="#16a085",
+            command=self.start_guild_scraping,
+        )
+        self.scrape_guild_btn.grid(row=2, column=1, padx=10, pady=5)
         self.refresh_accounts_overview()
         self.refresh_targets_overview()
         self.apply_module_states()
