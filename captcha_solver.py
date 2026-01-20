@@ -6,24 +6,38 @@ import httpx
 
 class CaptchaSolver:
     SUPPORTED_PROVIDERS = {"capsolver", "2captcha", "anticaptcha"}
+    PROVIDER_ALIASES = {
+        "capsolver": "capsolver",
+        "2captcha": "2captcha",
+        "anticaptcha": "anticaptcha",
+        "anti-captcha": "anticaptcha",
+        "anti captcha": "anticaptcha",
+    }
 
     def __init__(self, db_manager, log_callback):
         self.db = db_manager
         self.log = log_callback
 
+    def _normalize_provider(self, provider: str) -> str:
+        normalized = (provider or "").strip().lower()
+        return self.PROVIDER_ALIASES.get(normalized, provider)
+
     def get_provider(self) -> str:
-        provider = self.db.get_setting("captcha_provider", "capsolver")
+        provider = self._normalize_provider(self.db.get_setting("captcha_provider", "capsolver"))
         if provider not in self.SUPPORTED_PROVIDERS:
             return "capsolver"
         return provider
 
     def get_api_key(self, provider: Optional[str] = None) -> str:
-        provider = provider or self.get_provider()
+        provider = self._normalize_provider(provider or self.get_provider())
         key_name = f"{provider}_api_key"
-        return self.db.get_setting(key_name, "")
+        key = self.db.get_setting(key_name, "")
+        if not key and provider == "anticaptcha":
+            key = self.db.get_setting("anti-captcha_api_key", "")
+        return key
 
     def check_balance(self, provider: Optional[str] = None, api_key: Optional[str] = None) -> Tuple[bool, str]:
-        provider = provider or self.get_provider()
+        provider = self._normalize_provider(provider or self.get_provider())
         api_key = api_key or self.get_api_key(provider)
         if not api_key:
             return False, "Brak klucza API."
@@ -36,7 +50,7 @@ class CaptchaSolver:
         return False, "Nieobsługiwany provider."
 
     def solve_captcha(self, captcha_info: dict, provider: Optional[str] = None, api_key: Optional[str] = None) -> Tuple[bool, str]:
-        provider = provider or self.get_provider()
+        provider = self._normalize_provider(provider or self.get_provider())
         api_key = api_key or self.get_api_key(provider)
         if not api_key:
             return False, "Brak klucza API."

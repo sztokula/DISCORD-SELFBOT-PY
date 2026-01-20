@@ -602,18 +602,31 @@ class MassDMApp(ctk.CTk):
     def on_captcha_provider_change(self, _value=None):
         self._refresh_captcha_key()
 
+    def _normalize_captcha_provider(self, provider: str) -> str:
+        normalized = (provider or "").strip().lower()
+        if normalized in {"anti-captcha", "anti captcha", "anticaptcha"}:
+            return "anticaptcha"
+        if normalized in {"capsolver", "2captcha"}:
+            return normalized
+        return provider
+
     def _get_captcha_provider_key(self) -> str:
         provider = self.captcha_provider_var.get()
-        return self.captcha_provider_labels.get(provider, provider)
+        provider = self.captcha_provider_labels.get(provider, provider)
+        return self._normalize_captcha_provider(provider)
 
     def _load_captcha_settings(self):
-        provider = self.captcha_solver.get_provider()
+        provider = self._normalize_captcha_provider(self.captcha_solver.get_provider())
         self.captcha_provider_var.set(self.captcha_provider_display.get(provider, provider))
         self._refresh_captcha_key()
 
     def _refresh_captcha_key(self):
         provider = self._get_captcha_provider_key()
         stored_key = self.db.get_setting(f"{provider}_api_key", "")
+        if not stored_key and provider == "anticaptcha":
+            stored_key = self.db.get_setting("anti-captcha_api_key", "")
+            if stored_key:
+                self.db.set_setting("anticaptcha_api_key", stored_key)
         self.captcha_key_input.delete(0, "end")
         if stored_key:
             self.captcha_key_input.insert(0, stored_key)

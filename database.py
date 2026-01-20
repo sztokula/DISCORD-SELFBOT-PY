@@ -16,6 +16,7 @@ class DatabaseManager:
             "capsolver_api_key",
             "2captcha_api_key",
             "anticaptcha_api_key",
+            "anti-captcha_api_key",
         }
 
     def get_connection(self):
