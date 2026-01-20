@@ -38,6 +38,7 @@ class MassDMApp(ctk.CTk):
         self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver) # Inicjalizacja
         self.token_manager = TokenManager(self.db, self.add_log)
         self.log_entries = []
+        self.error_entries = []
         self.log_filter_var = ctk.StringVar()
         self.logs_dir = Path("logs")
         self.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -103,8 +104,14 @@ class MassDMApp(ctk.CTk):
             anchor="w",
         )
         self.log_file_label.pack(fill="x", padx=10, pady=(5, 0))
-        self.log_box = ctk.CTkTextbox(self.log_frame, height=200, fg_color="#1a1a1a")
-        self.log_box.pack(fill="both", padx=10, pady=10)
+        self.log_tabs = ctk.CTkTabview(self.log_frame)
+        self.log_tabs.pack(fill="both", expand=True, padx=10, pady=10)
+        self.logs_tab = self.log_tabs.add("Logs")
+        self.errors_tab = self.log_tabs.add("Errors")
+        self.log_box = ctk.CTkTextbox(self.logs_tab, height=200, fg_color="#1a1a1a")
+        self.log_box.pack(fill="both", expand=True, padx=10, pady=10)
+        self.error_box = ctk.CTkTextbox(self.errors_tab, height=200, fg_color="#1a1a1a")
+        self.error_box.pack(fill="both", expand=True, padx=10, pady=10)
 
         # --- BOTTOM CONTROL BAR ---
         self.control_bar = ctk.CTkFrame(self, height=80)
@@ -230,6 +237,9 @@ class MassDMApp(ctk.CTk):
                 self._write_log_to_file(entry)
                 if self._matches_log_filter(entry):
                     self._append_log_entry(entry)
+                if self._is_error_entry(entry):
+                    self.error_entries.append(entry)
+                    self._append_error_entry(entry)
         except queue.Empty:
             pass
         self.after(100, self.process_log_queue)
@@ -237,6 +247,13 @@ class MassDMApp(ctk.CTk):
     def _append_log_entry(self, entry):
         self.log_box.insert("end", f"[{entry['timestamp']}] {entry['message']}\n")
         self.log_box.see("end")
+
+    def _append_error_entry(self, entry):
+        self.error_box.insert("end", f"[{entry['timestamp']}] {entry['message']}\n")
+        self.error_box.see("end")
+
+    def _is_error_entry(self, entry):
+        return entry["message"].strip().casefold().startswith("błąd:")
 
     def _matches_log_filter(self, entry):
         filter_text = self.log_filter_var.get().strip().lower()
