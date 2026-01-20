@@ -21,6 +21,7 @@ class DatabaseManager:
             "2captcha_api_key",
             "anticaptcha_api_key",
             "anti-captcha_api_key",
+            "scrape_token",
         }
         self.warmup_days = 7
         self.warmup_min_limit = 1

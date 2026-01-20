@@ -77,6 +77,7 @@ class MassDMApp(ctk.CTk):
         self._settings_scrollbar_widget = None
         self._template_editing = False
         self._template_max_chars = 2000
+        self._template_save_job = None
         self.version_status_var = ctk.StringVar(value="Last check: --")
         self.update_status_var = ctk.StringVar(value="Update: --")
         self.update_info = None
@@ -164,7 +165,7 @@ class MassDMApp(ctk.CTk):
         self._set_workflow_stage("setup")
 
         # 1. MESSAGE SECTION (moved to settings)
-        self.friend_request_var = ctk.BooleanVar(value=False)
+        self.friend_request_var = ctk.BooleanVar(value=self._get_setting_bool("use_friend_request", False))
         self.settings_loaded = False
         self.workflow_stage = "setup"
 
@@ -295,6 +296,21 @@ class MassDMApp(ctk.CTk):
             return None
         return value
 
+    def _parse_min_value_from_settings(self, key, label, cast_type=int, min_value=0.0):
+        value = self._get_setting_number(key, None)
+        if value is None:
+            self.log_error(f"{label} is not set. Open settings.")
+            return None
+        try:
+            value = cast_type(value)
+        except (TypeError, ValueError):
+            self.log_error(f"{label} has an invalid format.")
+            return None
+        if value < min_value:
+            self.log_error(f"{label} must be >= {min_value}.")
+            return None
+        return value
+
     def _parse_delay_range_from_settings(self, min_key, max_key, label, cast_type=int, min_value=0.0):
         min_val = self._get_setting_number(min_key, None)
         max_val = self._get_setting_number(max_key, None)
@@ -354,12 +370,42 @@ class MassDMApp(ctk.CTk):
         if not any(template.strip() for template in templates):
             self.db.set_setting("message_templates", None)
             self.add_log("[Templates] Cleared message templates.")
+            self._set_template_save_status("Save status: cleared", "#f39c12")
             self.refresh_workflow_status()
             return
         payload = json.dumps(templates, ensure_ascii=True)
         self.db.set_setting("message_templates", payload)
         self.add_log("[Templates] Saved message templates.")
+        self._set_template_save_status("Save status: saved", "#2ecc71")
         self.refresh_workflow_status()
+
+    def _schedule_save_message_templates(self):
+        if self._template_save_job is not None:
+            try:
+                self.after_cancel(self._template_save_job)
+            except Exception:
+                pass
+        self._set_template_save_status("Save status: pending", "#f39c12")
+        self._template_save_job = self.after(300, self._save_message_templates_async)
+
+    def _save_message_templates_async(self):
+        self._template_save_job = None
+        self._set_template_save_status("Save status: saving...", "#f39c12")
+        templates = self._get_message_templates()
+        if not any(template.strip() for template in templates):
+            self.db.set_setting("message_templates", None)
+            self.after(0, lambda: self.add_log("[Templates] Cleared message templates."))
+            self.after(0, lambda: self._set_template_save_status("Save status: cleared", "#f39c12"))
+            self.after(0, self.refresh_workflow_status)
+            return
+        payload = json.dumps(templates, ensure_ascii=True)
+        def _worker():
+            self.db.set_setting("message_templates", payload)
+            self.after(0, lambda: self.add_log("[Templates] Saved message templates."))
+            self.after(0, lambda: self._set_template_save_status("Save status: saved", "#2ecc71"))
+            self.after(0, self.refresh_workflow_status)
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
 
     def _load_message_templates(self):
         if not hasattr(self, "template_boxes"):
@@ -373,6 +419,53 @@ class MassDMApp(ctk.CTk):
             box.edit_modified(False)
         self._template_editing = False
         self._refresh_template_counters()
+
+    def save_scrape_settings(self):
+        token = None
+        if hasattr(self, "token_input") and self.token_input.winfo_exists():
+            token = self.token_input.get().strip()
+        channel_id = None
+        if hasattr(self, "scrape_channel_input") and self.scrape_channel_input.winfo_exists():
+            channel_id = self.scrape_channel_input.get().strip()
+        guild_id = None
+        if hasattr(self, "scrape_guild_input") and self.scrape_guild_input.winfo_exists():
+            guild_id = self.scrape_guild_input.get().strip()
+        range_value = None
+        if hasattr(self, "scrape_range_input") and self.scrape_range_input.winfo_exists():
+            range_value = self.scrape_range_input.get().strip()
+
+        self.db.set_setting("scrape_token", token or None)
+        self.db.set_setting("scrape_channel_id", channel_id or None)
+        self.db.set_setting("scrape_guild_id", guild_id or None)
+        self.db.set_setting("scrape_range", range_value or None)
+
+    def _load_scrape_settings(self):
+        if not hasattr(self, "scrape_channel_input"):
+            return
+        token = self.db.get_setting("scrape_token", "").strip()
+        if token and hasattr(self, "token_input") and self.token_input.winfo_exists():
+            self.token_input.delete(0, "end")
+            self.token_input.insert(0, token)
+        channel_id = self.db.get_setting("scrape_channel_id", "").strip()
+        if channel_id:
+            self.scrape_channel_input.delete(0, "end")
+            self.scrape_channel_input.insert(0, channel_id)
+        guild_id = self.db.get_setting("scrape_guild_id", "").strip()
+        if guild_id:
+            self.scrape_guild_input.delete(0, "end")
+            self.scrape_guild_input.insert(0, guild_id)
+        range_value = self.db.get_setting("scrape_range", "").strip()
+        if range_value:
+            self.scrape_range_input.delete(0, "end")
+            self.scrape_range_input.insert(0, range_value)
+
+    def save_status_settings(self):
+        if not hasattr(self, "status_text_input"):
+            return
+        status_text = self.status_text_input.get().strip()
+        status_type = self.status_type_var.get().strip()
+        self.db.set_setting("status_text", status_text or None)
+        self.db.set_setting("status_type", status_type or None)
 
     def _show_template_help(self):
         message = (
@@ -429,7 +522,14 @@ class MassDMApp(ctk.CTk):
             self._template_editing = False
 
     def _on_template_tab_changed(self):
-        self.save_message_templates()
+        self._schedule_save_message_templates()
+
+    def _set_template_save_status(self, text, color="#8a8a8a"):
+        if not hasattr(self, "template_save_status_label"):
+            return
+        if not self.template_save_status_label.winfo_exists():
+            return
+        self.template_save_status_label.configure(text=text, text_color=color)
 
     def _count_invites(self):
         return len(self._get_saved_invites())
@@ -1145,12 +1245,22 @@ class MassDMApp(ctk.CTk):
         if not self.module_vars["scraper"].get():
             self.log_error("Scraper module is disabled.")
             return False
-        if not hasattr(self, "token_input") or not self.token_input.winfo_exists():
+        token = ""
+        if hasattr(self, "token_input") and self.token_input.winfo_exists():
+            token = self.token_input.get().strip()
+        else:
+            token = self.db.get_setting("scrape_token", "").strip()
+        if not token:
             self.log_error("Open settings and enter a scraping token.")
             return False
-        token = self.token_input.get().strip()
-        channel_id = self.scrape_channel_input.get().strip()
-        range_value = self.scrape_range_input.get().strip()
+        if hasattr(self, "scrape_channel_input") and self.scrape_channel_input.winfo_exists():
+            channel_id = self.scrape_channel_input.get().strip()
+        else:
+            channel_id = self.db.get_setting("scrape_channel_id", "").strip()
+        if hasattr(self, "scrape_range_input") and self.scrape_range_input.winfo_exists():
+            range_value = self.scrape_range_input.get().strip()
+        else:
+            range_value = self.db.get_setting("scrape_range", "").strip()
         if not self.validate_token_format(token):
             return False
         if not self.is_valid_channel_id(channel_id):
@@ -1158,6 +1268,8 @@ class MassDMApp(ctk.CTk):
         limit = self._get_scrape_limit(range_value, 500)
         if limit is None:
             return False
+        if hasattr(self, "scrape_channel_input") and self.scrape_channel_input.winfo_exists():
+            self.save_scrape_settings()
         thread = threading.Thread(
             target=self.scraper.scrape_history,
             args=(token, channel_id, limit, on_complete),
@@ -1170,12 +1282,22 @@ class MassDMApp(ctk.CTk):
         if not self.module_vars["scraper"].get():
             self.log_error("Scraper module is disabled.")
             return False
-        if not hasattr(self, "token_input") or not self.token_input.winfo_exists():
+        token = ""
+        if hasattr(self, "token_input") and self.token_input.winfo_exists():
+            token = self.token_input.get().strip()
+        else:
+            token = self.db.get_setting("scrape_token", "").strip()
+        if not token:
             self.log_error("Open settings and enter a scraping token.")
             return False
-        token = self.token_input.get().strip()
-        guild_id = self.scrape_guild_input.get().strip()
-        range_value = self.scrape_range_input.get().strip()
+        if hasattr(self, "scrape_guild_input") and self.scrape_guild_input.winfo_exists():
+            guild_id = self.scrape_guild_input.get().strip()
+        else:
+            guild_id = self.db.get_setting("scrape_guild_id", "").strip()
+        if hasattr(self, "scrape_range_input") and self.scrape_range_input.winfo_exists():
+            range_value = self.scrape_range_input.get().strip()
+        else:
+            range_value = self.db.get_setting("scrape_range", "").strip()
         if not self.validate_token_format(token):
             return False
         if not self.is_valid_guild_id(guild_id):
@@ -1183,6 +1305,8 @@ class MassDMApp(ctk.CTk):
         limit = self._get_scrape_limit(range_value, 1000)
         if limit is None:
             return False
+        if hasattr(self, "scrape_guild_input") and self.scrape_guild_input.winfo_exists():
+            self.save_scrape_settings()
         thread = threading.Thread(
             target=self.scraper.scrape_guild_members,
             args=(token, guild_id, limit, on_complete),
@@ -1281,20 +1405,36 @@ class MassDMApp(ctk.CTk):
             )
         if not friend_delay:
             return
-        account_min_interval = self._parse_min_value(
-            self.account_min_interval_input,
-            "Account min interval (s)",
-            cast_type=int,
-            min_value=0,
-        )
+        if hasattr(self, "account_min_interval_input") and self.account_min_interval_input.winfo_exists():
+            account_min_interval = self._parse_min_value(
+                self.account_min_interval_input,
+                "Account min interval (s)",
+                cast_type=int,
+                min_value=0,
+            )
+        else:
+            account_min_interval = self._parse_min_value_from_settings(
+                "account_min_interval",
+                "Account min interval (s)",
+                cast_type=int,
+                min_value=0,
+            )
         if account_min_interval is None:
             return
-        target_min_interval = self._parse_min_value(
-            self.target_min_interval_input,
-            "Target min interval (s)",
-            cast_type=int,
-            min_value=0,
-        )
+        if hasattr(self, "target_min_interval_input") and self.target_min_interval_input.winfo_exists():
+            target_min_interval = self._parse_min_value(
+                self.target_min_interval_input,
+                "Target min interval (s)",
+                cast_type=int,
+                min_value=0,
+            )
+        else:
+            target_min_interval = self._parse_min_value_from_settings(
+                "target_min_interval",
+                "Target min interval (s)",
+                cast_type=int,
+                min_value=0,
+            )
         if target_min_interval is None:
             return
         dm_delay_min, dm_delay_max = dm_delay
@@ -1546,6 +1686,12 @@ class MassDMApp(ctk.CTk):
         if self.settings_window and self.settings_window.winfo_exists():
             self.save_delay_settings()
             self.save_message_templates()
+            self.save_scrape_settings()
+            self.save_invite_settings()
+            self.save_captcha_settings()
+            self.save_version_settings()
+            self.save_status_settings()
+            self._set_setting_bool("use_friend_request", self.friend_request_var.get())
             self.settings_window.destroy()
             self.refresh_workflow_status()
         self.settings_window = None
@@ -1964,8 +2110,10 @@ class MassDMApp(ctk.CTk):
         ctk.CTkLabel(self.status_frame, text="Status Type").grid(row=1, column=1, padx=10, pady=(0, 2), sticky="w")
         self.status_text_input = ctk.CTkEntry(self.status_frame, placeholder_text="Custom Status", width=350)
         self.status_text_input.grid(row=2, column=0, padx=10, pady=5)
-        self.status_text_input.insert(0, "Playing Metin2")
-        self.status_type_var = ctk.StringVar(value="online")
+        stored_status_text = self.db.get_setting("status_text", "").strip()
+        self.status_text_input.insert(0, stored_status_text or "Playing Metin2")
+        stored_status_type = self.db.get_setting("status_type", "online").strip() or "online"
+        self.status_type_var = ctk.StringVar(value=stored_status_type)
         self.status_dropdown = ctk.CTkOptionMenu(self.status_frame, values=["online", "idle", "dnd", "invisible"], variable=self.status_type_var)
         self.status_dropdown.grid(row=2, column=1, padx=10, pady=5)
         self.update_status_btn = ctk.CTkButton(self.status_frame, text="Start Auto Status", fg_color="#9b59b6", command=self.start_status_update)
@@ -2002,6 +2150,7 @@ class MassDMApp(ctk.CTk):
             command=self.start_guild_scraping,
         )
         self.scrape_guild_btn.grid(row=4, column=2, padx=10, pady=5, sticky="w")
+        self._load_scrape_settings()
         self.refresh_accounts_overview()
         self.refresh_targets_overview()
         self.refresh_banlist_overview()

@@ -64,7 +64,7 @@ class TokenManager:
             while status == "retry" and attempts < self.max_validation_retries:
                 attempts += 1
                 time.sleep(self.retry_backoff_seconds * attempts)
-                status, info = self._fetch_token_info(token)
+                status, info = self._fetch_token_info(token, proxy)
 
             if status == "ok":
                 self.log(f"[OK] Account {acc_id}: {info}")
