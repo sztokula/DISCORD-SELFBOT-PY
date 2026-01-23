@@ -49,6 +49,8 @@ def normalize_proxy(proxy, default_scheme="http"):
     raw = (proxy or "").strip()
     if not raw:
         return ""
+    if default_scheme not in VALID_PROXY_SCHEMES:
+        default_scheme = "http"
 
     if "://" in raw:
         parsed = urlparse(raw)

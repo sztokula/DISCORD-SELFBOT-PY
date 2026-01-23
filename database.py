@@ -1,5 +1,6 @@
 ﻿import base64
 import hashlib
+import json
 import os
 import sqlite3
 import threading
@@ -22,6 +23,7 @@ class DatabaseManager:
             "anticaptcha_api_key",
             "anti-captcha_api_key",
             "scrape_token",
+            "proxy_pool",
         }
         self.warmup_days = 7
         self.warmup_min_limit = 1
@@ -532,6 +534,20 @@ class DatabaseManager:
             overview.append((acc_id, status, proxy, effective_limit, sent_today, join_limit, join_today))
         return overview
 
+    def get_account_proxies(self):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            '''
+            SELECT id, proxy
+            FROM accounts
+            WHERE proxy IS NOT NULL AND TRIM(proxy) <> ""
+            '''
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return rows
+
     def reset_account_counters(self):
         with self.write_lock:
             conn = self.get_connection()
@@ -627,3 +643,55 @@ class DatabaseManager:
         if isinstance(value, str) and value.startswith("enc:"):
             return self._decrypt_token(value)
         return value
+
+    def get_proxy_pool(self):
+        raw = self.get_setting("proxy_pool", "")
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            return []
+        if isinstance(data, list):
+            return [str(item) for item in data if item]
+        return []
+
+    def set_proxy_pool(self, proxies):
+        proxies = [proxy for proxy in proxies if proxy]
+        unique = []
+        seen = set()
+        for proxy in proxies:
+            if proxy in seen:
+                continue
+            seen.add(proxy)
+            unique.append(proxy)
+        if unique:
+            self.set_setting("proxy_pool", json.dumps(unique))
+        else:
+            self.set_setting("proxy_pool", None)
+
+    def add_proxy_pool(self, proxies):
+        if not proxies:
+            return
+        pool = self.get_proxy_pool()
+        seen = set(pool)
+        for proxy in proxies:
+            if not proxy or proxy in seen:
+                continue
+            pool.append(proxy)
+            seen.add(proxy)
+        self.set_proxy_pool(pool)
+
+    def pop_proxy_from_pool(self, exclude=None):
+        pool = self.get_proxy_pool()
+        if not pool:
+            return None
+        exclude_set = set(exclude or [])
+        if exclude_set:
+            pool = [proxy for proxy in pool if proxy not in exclude_set]
+            self.set_proxy_pool(pool)
+        if not pool:
+            return None
+        proxy = pool.pop(0)
+        self.set_proxy_pool(pool)
+        return proxy

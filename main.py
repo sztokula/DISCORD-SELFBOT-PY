@@ -154,12 +154,14 @@ class MassDMApp(ctk.CTk):
         self.step_accounts_label.grid(row=1, column=0, padx=10, pady=2, sticky="w")
         self.step_proxies_label = ctk.CTkLabel(self.workflow_frame, text="2. Proxy: --", anchor="w")
         self.step_proxies_label.grid(row=2, column=0, padx=10, pady=2, sticky="w")
-        self.step_invites_label = ctk.CTkLabel(self.workflow_frame, text="3. Servers: --", anchor="w")
-        self.step_invites_label.grid(row=3, column=0, padx=10, pady=2, sticky="w")
-        self.step_templates_label = ctk.CTkLabel(self.workflow_frame, text="4. Templates: --", anchor="w")
-        self.step_templates_label.grid(row=4, column=0, padx=10, pady=2, sticky="w")
-        self.step_settings_label = ctk.CTkLabel(self.workflow_frame, text="5. Settings: --", anchor="w")
-        self.step_settings_label.grid(row=5, column=0, padx=10, pady=2, sticky="w")
+        self.step_proxy_pool_label = ctk.CTkLabel(self.workflow_frame, text="3. Proxy pool: --", anchor="w")
+        self.step_proxy_pool_label.grid(row=3, column=0, padx=10, pady=2, sticky="w")
+        self.step_invites_label = ctk.CTkLabel(self.workflow_frame, text="4. Servers: --", anchor="w")
+        self.step_invites_label.grid(row=4, column=0, padx=10, pady=2, sticky="w")
+        self.step_templates_label = ctk.CTkLabel(self.workflow_frame, text="5. Templates: --", anchor="w")
+        self.step_templates_label.grid(row=5, column=0, padx=10, pady=2, sticky="w")
+        self.step_settings_label = ctk.CTkLabel(self.workflow_frame, text="6. Settings: --", anchor="w")
+        self.step_settings_label.grid(row=6, column=0, padx=10, pady=2, sticky="w")
 
         self.workflow_refresh_btn = ctk.CTkButton(self.workflow_frame, text="Refresh", command=self.refresh_workflow_status)
         self.workflow_refresh_btn.grid(row=1, column=1, padx=10, pady=5, sticky="e")
@@ -359,6 +361,37 @@ class MassDMApp(ctk.CTk):
     def _normalize_proxy(self, proxy):
         return normalize_proxy(proxy)
 
+    def _get_assigned_proxy_set(self):
+        assigned = set()
+        for acc_id, proxy in self.db.get_account_proxies():
+            normalized = self._normalize_proxy(proxy)
+            if normalized:
+                assigned.add(normalized)
+                if normalized != proxy:
+                    self.db.update_account_proxy(acc_id, normalized)
+            else:
+                assigned.add(proxy)
+        return assigned
+
+    def _pop_proxy_from_pool(self, exclude=None):
+        return self.db.pop_proxy_from_pool(exclude)
+
+    def _add_proxy_pool(self, proxies):
+        self.db.add_proxy_pool(proxies)
+
+    def _replace_proxy_from_pool(self, acc_id, assigned_set, context_label):
+        while True:
+            candidate = self._pop_proxy_from_pool(assigned_set)
+            if not candidate:
+                return None, "No unused proxies in pool."
+            ok, err = self._check_proxy_alive(candidate)
+            if ok:
+                self.db.update_account_proxy(acc_id, candidate)
+                assigned_set.add(candidate)
+                self.add_log(f"[Proxy] {context_label}: account {acc_id} swapped to pool proxy.")
+                return candidate, None
+            self.log_warning(f"[Proxy] {context_label}: pool proxy failed for {acc_id}: {err}")
+
     def _check_proxy_alive(self, proxy):
         if not proxy:
             return False, "Proxy is empty."
@@ -394,15 +427,32 @@ class MassDMApp(ctk.CTk):
         if not self._is_proxy_required():
             return 0
         restored = 0
+        assigned_set = self._get_assigned_proxy_set()
         accounts = self.db.get_accounts_overview()
         for acc_id, status, proxy, *_rest in accounts:
             status_value = (status or "").strip().casefold()
             if status_value != "unverified":
                 continue
             if not proxy:
+                replacement, _err = self._replace_proxy_from_pool(
+                    acc_id,
+                    assigned_set,
+                    "restore",
+                )
+                if replacement:
+                    self.db.update_account_status(acc_id, "Active")
+                    restored += 1
                 continue
             normalized = self._normalize_proxy(proxy)
             if not normalized:
+                replacement, _err = self._replace_proxy_from_pool(
+                    acc_id,
+                    assigned_set,
+                    "restore",
+                )
+                if replacement:
+                    self.db.update_account_status(acc_id, "Active")
+                    restored += 1
                 continue
             if normalized != proxy:
                 self.db.update_account_proxy(acc_id, normalized)
@@ -411,37 +461,80 @@ class MassDMApp(ctk.CTk):
             if ok:
                 self.db.update_account_status(acc_id, "Active")
                 restored += 1
+                continue
+            replacement, _err = self._replace_proxy_from_pool(
+                acc_id,
+                assigned_set,
+                "restore",
+            )
+            if replacement:
+                self.db.update_account_status(acc_id, "Active")
+                restored += 1
         if restored:
             self.add_log(f"[Proxy] Restored {restored} account(s) to Active.")
         return restored
 
     def _ensure_account_proxies(self, accounts, context_label):
         if not self._is_proxy_required():
-            return accounts
+            normalized_accounts = []
+            for acc in accounts:
+                acc_id, _, _, proxy, *_rest = acc
+                if proxy:
+                    normalized = self._normalize_proxy(proxy)
+                    if normalized and normalized != proxy:
+                        self.db.update_account_proxy(acc_id, normalized)
+                        proxy = normalized
+                acc_list = list(acc)
+                acc_list[3] = proxy
+                normalized_accounts.append(tuple(acc_list))
+            return normalized_accounts
         restored = self._restore_proxy_verified_accounts()
         if restored:
             accounts = self.db.get_active_accounts("discord")
         if not accounts:
             self.log_error(f"[Proxy] No accounts available for {context_label}.")
             return []
+        assigned_set = self._get_assigned_proxy_set()
         valid_accounts = []
         failures = []
         for acc in accounts:
             acc_id, _, _, proxy, _, _, _, _, _, _, _ = acc
             if not proxy:
-                failures.append((acc_id, "missing proxy"))
-                continue
+                replacement, err = self._replace_proxy_from_pool(
+                    acc_id,
+                    assigned_set,
+                    context_label,
+                )
+                if not replacement:
+                    failures.append((acc_id, "missing proxy" if not err else err))
+                    continue
+                proxy = replacement
             normalized = self._normalize_proxy(proxy)
             if not normalized:
-                failures.append((acc_id, "invalid proxy format"))
-                continue
+                replacement, err = self._replace_proxy_from_pool(
+                    acc_id,
+                    assigned_set,
+                    context_label,
+                )
+                if not replacement:
+                    failures.append((acc_id, "invalid proxy format" if not err else err))
+                    continue
+                proxy = replacement
+                normalized = proxy
             if normalized != proxy:
                 self.db.update_account_proxy(acc_id, normalized)
                 proxy = normalized
             ok, err = self._check_proxy_alive(proxy)
             if not ok:
-                failures.append((acc_id, err))
-                continue
+                replacement, rep_err = self._replace_proxy_from_pool(
+                    acc_id,
+                    assigned_set,
+                    context_label,
+                )
+                if not replacement:
+                    failures.append((acc_id, err if err else rep_err))
+                    continue
+                proxy = replacement
             acc_list = list(acc)
             acc_list[3] = proxy
             valid_accounts.append(tuple(acc_list))
@@ -460,7 +553,15 @@ class MassDMApp(ctk.CTk):
 
     def _ensure_scraper_proxy(self, proxy, context_label):
         if not self._is_proxy_required():
-            return proxy
+            if not proxy:
+                return ""
+            normalized = self._normalize_proxy(proxy)
+            if not normalized:
+                self.log_error(f"[Proxy] Invalid scraper proxy format ({context_label}).")
+                return None
+            if normalized != proxy:
+                self.db.set_setting("scrape_proxy", normalized)
+            return normalized
         if not proxy:
             self.log_error(f"[Proxy] Scraper proxy required for {context_label}.")
             return None
@@ -889,15 +990,17 @@ class MassDMApp(ctk.CTk):
         accounts = self.db.get_accounts_overview()
         account_count = len(accounts)
         proxy_count = sum(1 for acc in accounts if acc[2])
+        proxy_pool_count = len(self.db.get_proxy_pool())
         invite_count = self._count_invites()
         template_count = self._count_templates()
         settings_status = "tak" if self.settings_loaded else "nie"
 
         self.step_accounts_label.configure(text=f"1. Accounts: {account_count}")
         self.step_proxies_label.configure(text=f"2. Proxy: {proxy_count}")
-        self.step_invites_label.configure(text=f"3. Servers: {invite_count}")
-        self.step_templates_label.configure(text=f"4. Templates: {template_count}")
-        self.step_settings_label.configure(text=f"5. Settings: {settings_status}")
+        self.step_proxy_pool_label.configure(text=f"3. Proxy pool: {proxy_pool_count}")
+        self.step_invites_label.configure(text=f"4. Servers: {invite_count}")
+        self.step_templates_label.configure(text=f"5. Templates: {template_count}")
+        self.step_settings_label.configure(text=f"6. Settings: {settings_status}")
 
         can_next = account_count > 0 and invite_count > 0 and template_count > 0 and self.settings_loaded
         self.workflow_next_btn.configure(state="normal" if can_next else "disabled")
@@ -1688,15 +1791,22 @@ class MassDMApp(ctk.CTk):
     def _assign_proxies_to_empty_accounts(self, proxies):
         if not proxies:
             self.log_error("No valid proxies to assign.")
-            return 0, 0, 0
+            return 0, [], 0
         missing_ids = self.db.get_accounts_missing_proxy("discord")
         if not missing_ids:
             self.log_error("No accounts without proxy.")
-            return 0, len(proxies), 0
+            return 0, proxies, 0
         assign_count = min(len(proxies), len(missing_ids))
         for acc_id, proxy in zip(missing_ids, proxies):
             self.db.update_account_proxy(acc_id, proxy)
-        return assign_count, len(proxies) - assign_count, len(missing_ids) - assign_count
+        if assign_count:
+            assigned_set = set(proxies[:assign_count])
+            pool = self.db.get_proxy_pool()
+            if pool:
+                pool = [proxy for proxy in pool if proxy not in assigned_set]
+                self.db.set_proxy_pool(pool)
+        unused = proxies[assign_count:]
+        return assign_count, unused, len(missing_ids) - assign_count
 
     def import_tokens_from_file(self):
         file_path = filedialog.askopenfilename(
@@ -1748,7 +1858,8 @@ class MassDMApp(ctk.CTk):
         if remaining:
             self.log_warning(f"[Proxy] {remaining} account(s) still without proxy.")
         if unused:
-            self.log_warning(f"[Proxy] {unused} proxy/proxies unused.")
+            self._add_proxy_pool(unused)
+            self.add_log(f"[Proxy] Added {len(unused)} proxy/proxies to pool.")
         self.refresh_accounts_overview()
 
     def import_token_proxy_pairs_from_file(self):
@@ -1776,6 +1887,13 @@ class MassDMApp(ctk.CTk):
                 added += 1
             else:
                 skipped += 1
+        if pairs:
+            used_proxies = {proxy for _token, proxy in pairs if proxy}
+            if used_proxies:
+                pool = self.db.get_proxy_pool()
+                if pool:
+                    pool = [proxy for proxy in pool if proxy not in used_proxies]
+                    self.db.set_proxy_pool(pool)
         if invalid:
             self.log_warning(f"Invalid pairs (skipping): {', '.join(invalid[:10])}" + ("..." if len(invalid) > 10 else ""))
         self.add_log(f"[Accounts] Imported {added} token/proxy pair(s) from file. Skipped: {skipped}.")
@@ -2037,11 +2155,17 @@ class MassDMApp(ctk.CTk):
             scrape_proxy = self.db.get_setting("scrape_proxy", "").strip()
         def _scrape_with_proxy_check():
             normalized_proxy = self._ensure_scraper_proxy(scrape_proxy, "channel scrape")
-            if not normalized_proxy:
+            if normalized_proxy is None:
                 if on_complete:
                     on_complete(False)
                 return
-            self.scraper.scrape_history(token, channel_id, limit, on_complete, proxy=normalized_proxy)
+            self.scraper.scrape_history(
+                token,
+                channel_id,
+                limit,
+                on_complete,
+                proxy=normalized_proxy or None,
+            )
         thread = threading.Thread(
             target=_scrape_with_proxy_check,
         )
@@ -2095,11 +2219,17 @@ class MassDMApp(ctk.CTk):
             scrape_proxy = self.db.get_setting("scrape_proxy", "").strip()
         def _scrape_with_proxy_check():
             normalized_proxy = self._ensure_scraper_proxy(scrape_proxy, "guild scrape")
-            if not normalized_proxy:
+            if normalized_proxy is None:
                 if on_complete:
                     on_complete(False)
                 return
-            self.scraper.scrape_guild_members(token, guild_id, limit, on_complete, proxy=normalized_proxy)
+            self.scraper.scrape_guild_members(
+                token,
+                guild_id,
+                limit,
+                on_complete,
+                proxy=normalized_proxy or None,
+            )
         thread = threading.Thread(
             target=_scrape_with_proxy_check,
         )
