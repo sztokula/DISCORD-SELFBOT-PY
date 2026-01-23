@@ -4,12 +4,14 @@ import httpx
 
 from proxy_utils import normalize_proxy, httpx_client
 from super_properties import set_super_properties_header
+from client_identity import USER_AGENT
 
 class TokenManager:
-    def __init__(self, db_manager, log_callback, metrics=None):
+    def __init__(self, db_manager, log_callback, metrics=None, telemetry=None):
         self.db = db_manager
         self.log = log_callback
         self.metrics = metrics
+        self.telemetry = telemetry
         self.max_validation_retries = 2
         self.retry_backoff_seconds = 2.0
         self._proxy_check_cache = {}
@@ -37,10 +39,11 @@ class TokenManager:
         if cached and (now - cached["ts"]) < self._proxy_check_ttl_seconds:
             return cached["ok"], cached["err"]
         try:
+            user_agent = USER_AGENT
             with httpx_client(
                 proxy,
                 timeout=httpx.Timeout(8.0),
-                headers={"User-Agent": "Mozilla/5.0"},
+                headers={"User-Agent": user_agent},
             ) as client:
                 set_super_properties_header(client.headers, self.db)
                 resp = client.get("https://discord.com/api/v9/experiments")
@@ -61,10 +64,17 @@ class TokenManager:
             if not proxy:
                 return "retry", "Invalid proxy format."
         url = "https://discord.com/api/v9/users/@me"
-        headers = {"Authorization": token}
+        user_agent = USER_AGENT
+        headers = {"Authorization": token, "User-Agent": user_agent}
         set_super_properties_header(headers, self.db)
         try:
-            with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx_client(
+                proxy,
+                headers=headers,
+                timeout=httpx.Timeout(10.0),
+                cookie_db=self.db,
+                cookie_token=token,
+            ) as client:
                 start = time.monotonic()
                 response = client.get(url)
         except Exception as exc:
@@ -88,6 +98,14 @@ class TokenManager:
             discriminator = data.get("discriminator")
             if not username or discriminator is None:
                 return "retry", "Invalid response"
+            if self.telemetry:
+                self.telemetry.send_science(
+                    token,
+                    user_agent,
+                    "token_check",
+                    properties={"username": username, "discriminator": discriminator},
+                    proxy=proxy,
+                )
             return "ok", f"{username}#{discriminator}"
         if response.status_code == 401:
             return "unauthorized", "Invalid Token"

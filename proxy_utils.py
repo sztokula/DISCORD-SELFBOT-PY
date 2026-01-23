@@ -1,6 +1,7 @@
 from urllib.parse import quote, urlparse
 from contextlib import contextmanager
 from curl_cffi import requests as curl_requests
+from client_identity import IMPERSONATE_PROFILE
 
 try:
     import httpx as _httpx
@@ -150,13 +151,94 @@ def _normalize_timeout(timeout):
     return timeout
 
 
+def _resolve_cookie_token(cookie_token):
+    if callable(cookie_token):
+        try:
+            return cookie_token()
+        except Exception:
+            return None
+    return cookie_token
+
+
+def _load_cookies_into_session(client, cookies):
+    if not cookies:
+        return
+    try:
+        if isinstance(cookies, dict):
+            client.cookies.update(cookies)
+            return
+        if isinstance(cookies, list):
+            for item in cookies:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name")
+                if not name:
+                    continue
+                value = item.get("value", "")
+                kwargs = {}
+                domain = item.get("domain")
+                if domain:
+                    kwargs["domain"] = domain
+                path = item.get("path")
+                if path:
+                    kwargs["path"] = path
+                expires = item.get("expires")
+                if expires is not None:
+                    kwargs["expires"] = expires
+                secure = item.get("secure")
+                if secure is not None:
+                    kwargs["secure"] = secure
+                client.cookies.set(name, value, **kwargs)
+    except Exception:
+        return
+
+
+def _dump_cookies_from_session(client):
+    if not client or not hasattr(client, "cookies"):
+        return []
+    jar = getattr(client.cookies, "jar", None) or client.cookies
+    cookies = []
+    try:
+        for cookie in jar:
+            cookies.append(
+                {
+                    "name": getattr(cookie, "name", None),
+                    "value": getattr(cookie, "value", ""),
+                    "domain": getattr(cookie, "domain", None),
+                    "path": getattr(cookie, "path", None),
+                    "secure": getattr(cookie, "secure", None),
+                    "expires": getattr(cookie, "expires", None),
+                }
+            )
+        return [item for item in cookies if item.get("name")]
+    except Exception:
+        pass
+    try:
+        if hasattr(client.cookies, "get_dict"):
+            return client.cookies.get_dict()
+    except Exception:
+        return []
+    return []
+
+
 @contextmanager
-def httpx_client(proxy=None, **kwargs):
+def httpx_client(proxy=None, cookie_db=None, cookie_token=None, **kwargs):
     proxies = build_httpx_proxies(proxy)
     if proxies:
         kwargs.setdefault("proxies", proxies)
     if "timeout" in kwargs:
         kwargs["timeout"] = _normalize_timeout(kwargs["timeout"])
-    kwargs.setdefault("impersonate", "chrome120")
+    kwargs.setdefault("impersonate", IMPERSONATE_PROFILE)
     with curl_requests.Session(**kwargs) as client:
-        yield client
+        if cookie_db and cookie_token:
+            token_value = _resolve_cookie_token(cookie_token)
+            if token_value:
+                cookies = cookie_db.get_token_cookies(token_value)
+                _load_cookies_into_session(client, cookies)
+        try:
+            yield client
+        finally:
+            if cookie_db and cookie_token:
+                token_value = _resolve_cookie_token(cookie_token)
+                if token_value:
+                    cookie_db.set_token_cookies(token_value, _dump_cookies_from_session(client))

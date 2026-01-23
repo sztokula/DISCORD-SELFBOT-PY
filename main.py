@@ -20,8 +20,11 @@ from updater import UpdateManager, UpdateError
 from metrics import HealthMetrics
 from profile_updater import ProfileUpdater
 from build_number_updater import BuildNumberUpdater
+from telemetry import TelemetryClient
+from gateway import GatewayManager
 from proxy_utils import normalize_proxy, httpx_client
 from super_properties import set_super_properties_header
+from client_identity import USER_AGENT
 import httpx
 
 ctk.set_appearance_mode("Dark")
@@ -51,12 +54,26 @@ class MassDMApp(ctk.CTk):
         
         self.metrics = HealthMetrics()
         self.captcha_solver = CaptchaSolver(self.db, self.add_log)
-        self.worker = DiscordWorker(self.db, self.add_log, self.metrics, self.captcha_solver)
-        self.scraper = DiscordScraper(self.db, self.add_log, self.metrics)
-        self.status_changer = StatusChanger(self.db, self.add_log, self.metrics)
-        self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver, self.metrics) # Inicjalizacja
-        self.token_manager = TokenManager(self.db, self.add_log, self.metrics)
-        self.profile_updater = ProfileUpdater(self.db, self.add_log, self.metrics)
+        self.telemetry = TelemetryClient(self.db, self.add_log)
+        self.gateway_manager = GatewayManager(self.db, self.add_log)
+        self._gateway_thread = threading.Thread(
+            target=self._run_gateway_manager,
+            daemon=True,
+        )
+        self._gateway_thread.start()
+        self.worker = DiscordWorker(
+            self.db,
+            self.add_log,
+            self.metrics,
+            self.captcha_solver,
+            self.telemetry,
+            self.gateway_manager,
+        )
+        self.scraper = DiscordScraper(self.db, self.add_log, self.metrics, self.telemetry)
+        self.status_changer = StatusChanger(self.db, self.add_log, self.metrics, self.telemetry)
+        self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver, self.metrics, self.telemetry) # Inicjalizacja
+        self.token_manager = TokenManager(self.db, self.add_log, self.metrics, self.telemetry)
+        self.profile_updater = ProfileUpdater(self.db, self.add_log, self.metrics, self.telemetry)
         self.build_number_updater = BuildNumberUpdater(self.db, self.add_log)
         self._build_number_thread = threading.Thread(
             target=self.build_number_updater.run_forever,
@@ -273,6 +290,13 @@ class MassDMApp(ctk.CTk):
             "banned/dead": "#e74c3c",
         }
 
+    def _run_gateway_manager(self):
+        import asyncio
+        try:
+            asyncio.run(self.gateway_manager.run())
+        except Exception as exc:
+            self.add_log(f"[Gateway] Manager error: {exc}")
+
     def add_log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         level = self._get_log_level(message)
@@ -413,7 +437,7 @@ class MassDMApp(ctk.CTk):
         if cached and (now - cached["ts"]) < self._proxy_check_ttl_seconds:
             return cached["ok"], cached["err"]
         try:
-            headers = {"User-Agent": "Mozilla/5.0"}
+            headers = {"User-Agent": USER_AGENT}
             set_super_properties_header(headers, self.db)
             with httpx_client(
                 proxy,

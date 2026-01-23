@@ -144,6 +144,13 @@ class DatabaseManager:
                     value TEXT
                 )
             ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS token_cookies (
+                    token_hash TEXT PRIMARY KEY,
+                    cookies TEXT,
+                    updated_at TIMESTAMP
+                )
+            ''')
             conn.commit()
             conn.close()
 
@@ -195,6 +202,11 @@ class DatabaseManager:
                 continue
             encrypted = self._encrypt_token(token)
             cursor.execute("UPDATE accounts SET token = ? WHERE id = ?", (encrypted, acc_id))
+
+    def _token_hash(self, token):
+        if not token:
+            return None
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
     def add_account(self, platform, token, proxy="", limit=15, join_limit=5, status="Active"):
         conn = None
@@ -254,6 +266,27 @@ class DatabaseManager:
         if not decrypted and self.log:
             self.log(f"[Accounts] Invalid encryption key for account {account_id}.")
         return decrypted
+
+    def get_account_created_at(self, account_id):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT created_at FROM accounts WHERE id = ?", (account_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return row[0]
+
+    def get_account_age_hours(self, account_id):
+        created_at = self.get_account_created_at(account_id)
+        if not created_at:
+            return None
+        try:
+            created_dt = datetime.fromisoformat(str(created_at))
+        except (TypeError, ValueError):
+            return None
+        age_seconds = max(0.0, (datetime.now() - created_dt).total_seconds())
+        return age_seconds / 3600.0
 
     def reset_daily_counters(self, reference_datetime=None):
         if reference_datetime is None:
@@ -566,8 +599,16 @@ class DatabaseManager:
         with self.write_lock:
             conn = self.get_connection()
             cursor = conn.cursor()
+            token_hash = None
+            cursor.execute("SELECT token FROM accounts WHERE id = ?", (account_id,))
+            row = cursor.fetchone()
+            if row and row[0]:
+                token_value = self._decrypt_token(row[0])
+                token_hash = self._token_hash(token_value)
             cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
             cursor.execute("DELETE FROM last_dm WHERE account_id = ?", (account_id,))
+            if token_hash:
+                cursor.execute("DELETE FROM token_cookies WHERE token_hash = ?", (token_hash,))
             conn.commit()
             conn.close()
 
@@ -643,6 +684,58 @@ class DatabaseManager:
         if isinstance(value, str) and value.startswith("enc:"):
             return self._decrypt_token(value)
         return value
+
+    def get_token_cookies(self, token):
+        token_hash = self._token_hash(token)
+        if not token_hash:
+            return None
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT cookies FROM token_cookies WHERE token_hash = ?", (token_hash,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row or not row[0]:
+            return None
+        raw = row[0]
+        if isinstance(raw, str) and raw.startswith("enc:"):
+            raw = self._decrypt_token(raw)
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+
+    def set_token_cookies(self, token, cookies):
+        token_hash = self._token_hash(token)
+        if not token_hash:
+            return
+        stored = None
+        if cookies:
+            try:
+                raw = json.dumps(cookies)
+            except Exception:
+                raw = None
+            if raw:
+                stored = self._encrypt_token(raw)
+        with self.write_lock:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            if stored is None:
+                cursor.execute("DELETE FROM token_cookies WHERE token_hash = ?", (token_hash,))
+            else:
+                cursor.execute(
+                    '''
+                    INSERT INTO token_cookies (token_hash, cookies, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(token_hash) DO UPDATE SET
+                        cookies = excluded.cookies,
+                        updated_at = excluded.updated_at
+                    ''',
+                    (token_hash, stored, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                )
+            conn.commit()
+            conn.close()
 
     def get_proxy_pool(self):
         raw = self.get_setting("proxy_pool", "")

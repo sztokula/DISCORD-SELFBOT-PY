@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+import threading
 from typing import Callable, Dict, Optional
 
 try:
@@ -23,6 +24,8 @@ class GatewayClient:
         heartbeat_interval_seconds: float = 40.0,
         properties: Optional[Dict[str, str]] = None,
         proxy: Optional[str] = None,
+        on_connect: Optional[Callable[[str], None]] = None,
+        on_disconnect: Optional[Callable[[str], None]] = None,
     ):
         self.token = token
         self.log = log
@@ -33,6 +36,8 @@ class GatewayClient:
             "device": "",
         }
         self.proxy = proxy
+        self.on_connect = on_connect
+        self.on_disconnect = on_disconnect
         self._stop = asyncio.Event()
         self._last_sequence = None
 
@@ -61,11 +66,23 @@ class GatewayClient:
                 await asyncio.sleep(5)
 
     async def _handle_connection(self, ws):
+        if self.on_connect:
+            try:
+                self.on_connect(self.token)
+            except Exception:
+                pass
         hello_payload = await ws.recv()
         interval = self._extract_heartbeat_interval(hello_payload)
         await ws.send(json.dumps(self._identify_payload()))
         self._log("[Gateway] IDENTIFY sent")
-        await self._heartbeat_loop(ws, interval)
+        try:
+            await self._heartbeat_loop(ws, interval)
+        finally:
+            if self.on_disconnect:
+                try:
+                    self.on_disconnect(self.token)
+                except Exception:
+                    pass
 
     def _extract_heartbeat_interval(self, payload):
         interval = self.heartbeat_interval_seconds
@@ -140,6 +157,8 @@ class GatewayManager:
         self._clients = []
         self._tasks = []
         self._stop = asyncio.Event()
+        self._active_tokens = set()
+        self._active_lock = threading.Lock()
 
     def stop(self):
         for client in self._clients:
@@ -152,7 +171,13 @@ class GatewayManager:
             self._log("[Gateway] No active tokens found.")
             return
         for token, proxy in accounts:
-            client = GatewayClient(token, log=self.log, proxy=proxy)
+            client = GatewayClient(
+                token,
+                log=self.log,
+                proxy=proxy,
+                on_connect=self._mark_connected,
+                on_disconnect=self._mark_disconnected,
+            )
             self._clients.append(client)
             self._tasks.append(asyncio.create_task(client.run()))
         await self._stop.wait()
@@ -173,6 +198,25 @@ class GatewayManager:
     def _log(self, message):
         if self.log:
             self.log(message)
+
+    def _mark_connected(self, token):
+        if not token:
+            return
+        with self._active_lock:
+            self._active_tokens.add(token)
+
+    def _mark_disconnected(self, token):
+        if not token:
+            return
+        with self._active_lock:
+            if token in self._active_tokens:
+                self._active_tokens.remove(token)
+
+    def is_connected(self, token):
+        if not token:
+            return False
+        with self._active_lock:
+            return token in self._active_tokens
 
 
 async def run_gateway_for_active_tokens(db_manager, log=None):

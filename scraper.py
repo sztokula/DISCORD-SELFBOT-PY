@@ -2,12 +2,14 @@ import httpx
 from proxy_utils import httpx_client
 import time
 from super_properties import set_super_properties_header
+from client_identity import USER_AGENT
 
 class DiscordScraper:
-    def __init__(self, db_manager, log_callback, metrics=None):
+    def __init__(self, db_manager, log_callback, metrics=None, telemetry=None):
         self.db = db_manager
         self.log = log_callback
         self.metrics = metrics
+        self.telemetry = telemetry
         self.is_scraping = False
         self.max_retries = 3
         self.backoff_factor = 1.5
@@ -105,7 +107,7 @@ class DiscordScraper:
         
         headers = {
             "Authorization": token,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "User-Agent": USER_AGENT,
         }
         set_super_properties_header(headers, self.db)
         url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
@@ -115,7 +117,13 @@ class DiscordScraper:
         rate_limit_attempt = 0
         
         try:
-            with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx_client(
+                proxy,
+                headers=headers,
+                timeout=httpx.Timeout(10.0),
+                cookie_db=self.db,
+                cookie_token=token,
+            ) as client:
                 self_id = self._fetch_self_id(client)
                 while len(unique_ids) < limit and self.is_scraping:
                     params = {"limit": 100}
@@ -158,6 +166,14 @@ class DiscordScraper:
                 self.db.add_targets(list(unique_ids), "discord")
                 added_any = True
                 self.log(f"[Scraper] Success. Added {len(unique_ids)} new targets to the database.")
+                if hasattr(self, "telemetry") and self.telemetry:
+                    self.telemetry.send_science(
+                        token,
+                        headers.get("User-Agent"),
+                        "scrape_history",
+                        properties={"channel_id": channel_id, "count": len(unique_ids)},
+                        proxy=proxy,
+                    )
             
         except Exception as e:
             self.log(f"[Scraper] Critical error: {str(e)}")
@@ -177,7 +193,7 @@ class DiscordScraper:
 
         headers = {
             "Authorization": token,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "User-Agent": USER_AGENT,
         }
         set_super_properties_header(headers, self.db)
         url = f"https://discord.com/api/v9/guilds/{guild_id}/members"
@@ -187,7 +203,13 @@ class DiscordScraper:
         rate_limit_attempt = 0
 
         try:
-            with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx_client(
+                proxy,
+                headers=headers,
+                timeout=httpx.Timeout(10.0),
+                cookie_db=self.db,
+                cookie_token=token,
+            ) as client:
                 self_id = self._fetch_self_id(client)
                 while len(unique_ids) < limit and self.is_scraping:
                     remaining = max(1, limit - len(unique_ids))
@@ -246,6 +268,14 @@ class DiscordScraper:
                 self.db.add_targets(list(unique_ids), "discord")
                 added_any = True
                 self.log(f"[Scraper] Success. Added {len(unique_ids)} new targets to the database.")
+                if hasattr(self, "telemetry") and self.telemetry:
+                    self.telemetry.send_science(
+                        token,
+                        headers.get("User-Agent"),
+                        "scrape_guild_members",
+                        properties={"guild_id": guild_id, "count": len(unique_ids)},
+                        proxy=proxy,
+                    )
         except Exception as e:
             self.log(f"[Scraper] Critical error: {str(e)}")
 

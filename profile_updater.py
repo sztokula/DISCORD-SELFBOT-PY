@@ -5,13 +5,15 @@ from pathlib import Path
 import httpx
 from proxy_utils import httpx_client
 from super_properties import set_super_properties_header
+from client_identity import USER_AGENT
 
 
 class ProfileUpdater:
-    def __init__(self, db_manager, log_callback, metrics=None):
+    def __init__(self, db_manager, log_callback, metrics=None, telemetry=None):
         self.db = db_manager
         self.log = log_callback
         self.metrics = metrics
+        self.telemetry = telemetry
         self.max_retries = 3
         self.backoff_factor = 1.5
 
@@ -89,13 +91,20 @@ class ProfileUpdater:
                 self.log("[Profile] Empty profile payload.")
                 return
 
+            user_agent = USER_AGENT
             headers = {
                 "Authorization": token,
                 "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "User-Agent": user_agent,
             }
             set_super_properties_header(headers, self.db)
-            with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx_client(
+                proxy,
+                headers=headers,
+                timeout=httpx.Timeout(10.0),
+                cookie_db=self.db,
+                cookie_token=lambda: token,
+            ) as client:
                 updated = False
                 for attempt in range(self.max_retries + 1):
                     start = time.monotonic()
@@ -103,6 +112,17 @@ class ProfileUpdater:
                     self._record_request(time.monotonic() - start, response)
                     if response.status_code == 200:
                         self.log(f"[Profile] Account {acc_id}: profile updated.")
+                        if self.telemetry:
+                            self.telemetry.send_science(
+                                token,
+                                user_agent,
+                                "profile_update",
+                                properties={
+                                    "change_name": bool(change_name),
+                                    "change_avatar": bool(change_avatar),
+                                },
+                                proxy=proxy,
+                            )
                         updated = True
                         break
                     if response.status_code == 401:

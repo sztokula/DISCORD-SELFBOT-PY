@@ -3,12 +3,14 @@ import time
 import random
 from proxy_utils import httpx_client
 from super_properties import set_super_properties_header
+from client_identity import USER_AGENT
 
 class StatusChanger:
-    def __init__(self, db_manager, log_callback, metrics=None):
+    def __init__(self, db_manager, log_callback, metrics=None, telemetry=None):
         self.db = db_manager
         self.log = log_callback
         self.metrics = metrics
+        self.telemetry = telemetry
         self.is_running = False
         self.auto_running = False
         self.max_retries = 3
@@ -89,10 +91,12 @@ class StatusChanger:
         custom_text: e.g. 'Playing Metin2'
         """
         url = "https://discord.com/api/v9/users/@me/settings"
+        user_agent = USER_AGENT
         headers = {
             "Authorization": token,
             "Content-Type": "application/json"
         }
+        headers["User-Agent"] = user_agent
         set_super_properties_header(headers, self.db)
         
         # Discord payload - sets visual and custom status.
@@ -102,7 +106,13 @@ class StatusChanger:
         }
         
         try:
-            with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx_client(
+                proxy,
+                headers=headers,
+                timeout=httpx.Timeout(10.0),
+                cookie_db=self.db,
+                cookie_token=lambda: token,
+            ) as client:
                 refreshed = False
                 for attempt in range(self.max_retries + 1):
                     start = time.monotonic()
@@ -116,6 +126,14 @@ class StatusChanger:
                     if response.status_code in (200, 204):
                         if response.status_code == 204:
                             self.log("[Status] Status updated (204 No Content).")
+                        if self.telemetry:
+                            self.telemetry.send_science(
+                                token,
+                                user_agent,
+                                "status_update",
+                                properties={"status": status_type, "custom_text": custom_text},
+                                proxy=proxy,
+                            )
                         return True
                     if response.status_code == 429:
                         self.log("[Status] Rate limit. Applying backoff...")

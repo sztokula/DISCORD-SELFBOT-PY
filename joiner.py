@@ -3,14 +3,17 @@ from proxy_utils import httpx_client
 import time
 import random
 from super_properties import set_super_properties_header
+from delay_utils import gaussian_delay
+from client_identity import USER_AGENT
 
 class DiscordJoiner:
-    def __init__(self, db_manager, log_callback, captcha_solver=None, metrics=None):
+    def __init__(self, db_manager, log_callback, captcha_solver=None, metrics=None, telemetry=None):
         self.db = db_manager
         self.log = log_callback
         self.is_running = False
         self.captcha_solver = captcha_solver
         self.metrics = metrics
+        self.telemetry = telemetry
         self.max_retries = 3
         self.backoff_factor = 1.5
         self.captcha_retry_base_seconds = 60
@@ -88,15 +91,22 @@ class DiscordJoiner:
         invite_code = invite_code.split("/")[-1]
         
         url = f"https://discord.com/api/v9/invites/{invite_code}"
+        user_agent = USER_AGENT
         headers = {
             "Authorization": token,
             "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": user_agent
         }
         set_super_properties_header(headers, self.db)
         
         try:
-            with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx_client(
+                proxy,
+                headers=headers,
+                timeout=httpx.Timeout(10.0),
+                cookie_db=self.db,
+                cookie_token=lambda: token,
+            ) as client:
                 refreshed = False
                 for attempt in range(self.max_retries + 1):
                     start = time.monotonic()
@@ -109,6 +119,18 @@ class DiscordJoiner:
                         return False, "Unauthorized (token)", None
                     if response.status_code == 200:
                         guild_id = self._extract_guild_id(response)
+                        if guild_id:
+                            self._browse_guild(client, guild_id)
+                        if guild_id:
+                            self._post_ack(client, guild_id=guild_id)
+                        if self.telemetry:
+                            self.telemetry.send_science(
+                                token,
+                                user_agent,
+                                "join_server",
+                                properties={"invite": invite_code, "guild_id": guild_id},
+                                proxy=proxy,
+                            )
                         self._handle_post_join(
                             client,
                             guild_id,
@@ -128,6 +150,18 @@ class DiscordJoiner:
                             self._record_request(time.monotonic() - start, retry_resp)
                             if retry_resp.status_code == 200:
                                 guild_id = self._extract_guild_id(retry_resp)
+                                if guild_id:
+                                    self._browse_guild(client, guild_id)
+                                if guild_id:
+                                    self._post_ack(client, guild_id=guild_id)
+                                if self.telemetry:
+                                    self.telemetry.send_science(
+                                        token,
+                                        user_agent,
+                                        "join_server",
+                                        properties={"invite": invite_code, "guild_id": guild_id},
+                                        proxy=proxy,
+                                    )
                                 self._handle_post_join(
                                     client,
                                     guild_id,
@@ -236,8 +270,8 @@ class DiscordJoiner:
             
             did_join_attempt = True
             # IMPORTANT: add a larger delay between joins.
-            wait = random.randint(delay_min, delay_max)
-            self.log(f"[Joiner] Waiting {wait}s before the next account...")
+            wait = gaussian_delay(delay_min, delay_max)
+            self.log(f"[Joiner] Waiting {int(wait)}s before the next account...")
             self._sleep_with_stop(wait)
 
         while self.is_running and pending_retries:
@@ -283,8 +317,8 @@ class DiscordJoiner:
                     )
                 else:
                     self.log(f"[Joiner] Account {acc_id}: ERROR ({msg}) [{task['invite_code']}]")
-            wait = random.randint(delay_min, delay_max)
-            self.log(f"[Joiner] Waiting {wait}s before the next retry...")
+            wait = gaussian_delay(delay_min, delay_max)
+            self.log(f"[Joiner] Waiting {int(wait)}s before the next retry...")
             self._sleep_with_stop(wait)
 
         if self.is_running and not did_join_attempt:
@@ -303,29 +337,118 @@ class DiscordJoiner:
             remaining = end_time - time.monotonic()
             time.sleep(min(interval, max(0.0, remaining)))
 
+    def _post_ack(self, client, channel_id=None, message_id=None, guild_id=None):
+        url = None
+        if channel_id and message_id:
+            url = f"https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}/ack"
+        elif channel_id:
+            url = f"https://discord.com/api/v9/channels/{channel_id}/ack"
+        elif guild_id:
+            url = f"https://discord.com/api/v9/guilds/{guild_id}/ack"
+        if not url:
+            return False
+        try:
+            client.post(url, json={"token": None})
+            return True
+        except Exception:
+            return False
+
+    def _browse_guild(self, client, guild_id, channels_to_visit=2, messages_limit=15):
+        if not guild_id:
+            return False
+        try:
+            start = time.monotonic()
+            resp = client.get(f"https://discord.com/api/v9/guilds/{guild_id}/channels")
+            self._record_request(time.monotonic() - start, resp)
+        except Exception:
+            return False
+        if resp.status_code != 200:
+            return False
+        try:
+            channels = resp.json()
+        except Exception:
+            return False
+        if not isinstance(channels, list):
+            return False
+        candidates = []
+        for ch in channels:
+            if not isinstance(ch, dict):
+                continue
+            ch_type = ch.get("type")
+            if ch_type in (0, 5, 15):
+                ch_id = ch.get("id")
+                if ch_id:
+                    candidates.append(ch_id)
+        if not candidates:
+            return False
+        sample_count = min(max(1, int(channels_to_visit)), len(candidates))
+        picked = random.sample(candidates, k=sample_count)
+        for idx, channel_id in enumerate(picked):
+            try:
+                start = time.monotonic()
+                resp = client.get(
+                    f"https://discord.com/api/v9/channels/{channel_id}/messages",
+                    params={"limit": int(messages_limit)},
+                )
+                self._record_request(time.monotonic() - start, resp)
+            except Exception:
+                continue
+            if resp.status_code in (200, 204):
+                msg_id = None
+                try:
+                    payload = resp.json()
+                    if isinstance(payload, list) and payload:
+                        msg_id = payload[0].get("id")
+                except Exception:
+                    msg_id = None
+                if msg_id:
+                    self._post_ack(client, channel_id=channel_id, message_id=msg_id)
+                else:
+                    self._post_ack(client, channel_id=channel_id)
+            if idx < len(picked) - 1:
+                self._sleep_with_stop(gaussian_delay(1.0, 3.0))
+        return True
+
     def _extract_captcha(self, response):
         try:
             data = response.json()
         except Exception:
             return None
-        sitekey = data.get("captcha_sitekey")
+        if not isinstance(data, dict):
+            return None
+        def _get_captcha_field(payload, *keys):
+            for key in keys:
+                value = payload.get(key)
+                if value not in (None, ""):
+                    return value
+            for container_key in ("captcha", "captcha_data", "captcha_payload", "captchaData"):
+                nested = payload.get(container_key)
+                if isinstance(nested, dict):
+                    for key in keys:
+                        value = nested.get(key)
+                        if value not in (None, ""):
+                            return value
+            return None
+        sitekey = _get_captcha_field(data, "captcha_sitekey", "sitekey", "captchaSitekey")
         if not sitekey:
             return None
-        service = data.get("captcha_service") or "hcaptcha"
-        api_server = data.get("captcha_api_server") or data.get("captcha_service_url")
-        surl = data.get("captcha_surl") or api_server
-        action = data.get("captcha_action")
-        min_score = data.get("captcha_min_score") or data.get("captcha_score")
-        data_s = data.get("captcha_data_s") or data.get("captcha_data-s") or data.get("captcha_s")
-        cdata = data.get("captcha_cdata") or data.get("captcha_data")
-        pagedata = data.get("captcha_pagedata") or data.get("captcha_chl_page_data")
-        invisible = data.get("captcha_invisible")
-        enterprise = data.get("captcha_enterprise")
+        service = _get_captcha_field(data, "captcha_service") or "hcaptcha"
+        api_server = _get_captcha_field(data, "captcha_api_server", "captcha_service_url")
+        surl = _get_captcha_field(data, "captcha_surl") or api_server
+        action = _get_captcha_field(data, "captcha_action")
+        min_score = _get_captcha_field(data, "captcha_min_score", "captcha_score")
+        data_s = _get_captcha_field(data, "captcha_data_s", "captcha_data-s", "captcha_s")
+        cdata = _get_captcha_field(data, "captcha_cdata", "captcha_data")
+        pagedata = _get_captcha_field(data, "captcha_pagedata", "captcha_chl_page_data")
+        invisible = _get_captcha_field(data, "captcha_invisible")
+        enterprise = _get_captcha_field(data, "captcha_enterprise")
+        rqdata = _get_captcha_field(data, "captcha_rqdata", "rqdata")
+        rqtoken = _get_captcha_field(data, "captcha_rqtoken", "rqtoken")
         return {
             "service": service,
             "sitekey": sitekey,
-            "rqdata": data.get("captcha_rqdata"),
-            "rqtoken": data.get("captcha_rqtoken"),
+            "rqdata": rqdata,
+            "rqtoken": rqtoken,
             "surl": surl,
             "api_server": api_server,
             "action": action,

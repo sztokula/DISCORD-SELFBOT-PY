@@ -6,13 +6,17 @@ from collections import deque
 from datetime import datetime, timedelta
 from proxy_utils import httpx_client
 from super_properties import set_super_properties_header
+from delay_utils import gaussian_delay
+from client_identity import USER_AGENT
 
 class DiscordWorker:
-    def __init__(self, db_manager, log_callback, metrics=None, captcha_solver=None):
+    def __init__(self, db_manager, log_callback, metrics=None, captcha_solver=None, telemetry=None, gateway_manager=None):
         self.db = db_manager
         self.log = log_callback
         self.metrics = metrics
         self.captcha_solver = captcha_solver
+        self.telemetry = telemetry
+        self.gateway_manager = gateway_manager
         self.is_running = False
         self.max_retries = 3
         self.backoff_factor = 1.5
@@ -23,6 +27,43 @@ class DiscordWorker:
         self.captcha_retry_base_seconds = 60
         self.captcha_retry_max_seconds = 900
         self.max_captcha_retries = 3
+        self.dm_warmup_hours = self._get_dm_warmup_hours()
+
+    def _get_dm_warmup_hours(self):
+        try:
+            raw = self.db.get_setting("dm_warmup_hours", "")
+        except Exception:
+            raw = ""
+        if raw in (None, ""):
+            return 48.0
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return 48.0
+        return max(0.0, value)
+
+    def _is_dm_warmup_blocked(self, account_id):
+        if self.dm_warmup_hours <= 0:
+            return False, None
+        age_hours = self.db.get_account_age_hours(account_id)
+        if age_hours is None:
+            return False, None
+        if age_hours < self.dm_warmup_hours:
+            return True, self.dm_warmup_hours - age_hours
+        return False, None
+
+    def _ensure_gateway_connected(self, token):
+        if not self.gateway_manager:
+            return True
+        try:
+            connected = self.gateway_manager.is_connected(token)
+        except Exception:
+            connected = False
+        if not connected:
+            self.log("[Gateway] WebSocket down; stopping HTTP sending.")
+            self.is_running = False
+            return False
+        return True
 
     def _record_request(self, duration, response=None):
         if not self.metrics:
@@ -168,6 +209,48 @@ class DiscordWorker:
             remaining = end_time - time.monotonic()
             time.sleep(min(interval, max(0.0, remaining)))
 
+    def _typing_delay_seconds(self, message, min_chars_per_sec=5.0, max_chars_per_sec=8.0):
+        if not message:
+            return 0.0
+        length = len(message)
+        if length <= 0:
+            return 0.0
+        cps = random.uniform(min_chars_per_sec, max_chars_per_sec)
+        return max(0.2, length / max(0.1, cps))
+
+    def _post_ack(self, client, channel_id=None, message_id=None, guild_id=None):
+        url = None
+        if channel_id and message_id:
+            url = f"https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}/ack"
+        elif channel_id:
+            url = f"https://discord.com/api/v9/channels/{channel_id}/ack"
+        elif guild_id:
+            url = f"https://discord.com/api/v9/guilds/{guild_id}/ack"
+        if not url:
+            return False
+        try:
+            client.post(url, json={"token": None})
+            return True
+        except Exception:
+            return False
+
+    def _prefetch_channel_messages(self, client, channel_id, limit=50):
+        if not channel_id:
+            return None
+        url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
+        try:
+            start = time.monotonic()
+            resp = client.get(url, params={"limit": int(limit)})
+            self._record_request(time.monotonic() - start, resp)
+        except Exception:
+            return None
+        if resp.status_code != 200:
+            return None
+        try:
+            return resp.json()
+        except Exception:
+            return None
+
     def _refresh_token(self, account_id, current_token):
         if account_id is None:
             return None
@@ -203,24 +286,41 @@ class DiscordWorker:
             data = response.json()
         except Exception:
             return None
-        sitekey = data.get("captcha_sitekey")
+        if not isinstance(data, dict):
+            return None
+        def _get_captcha_field(payload, *keys):
+            for key in keys:
+                value = payload.get(key)
+                if value not in (None, ""):
+                    return value
+            for container_key in ("captcha", "captcha_data", "captcha_payload", "captchaData"):
+                nested = payload.get(container_key)
+                if isinstance(nested, dict):
+                    for key in keys:
+                        value = nested.get(key)
+                        if value not in (None, ""):
+                            return value
+            return None
+        sitekey = _get_captcha_field(data, "captcha_sitekey", "sitekey", "captchaSitekey")
         if not sitekey:
             return None
-        service = data.get("captcha_service") or "hcaptcha"
-        api_server = data.get("captcha_api_server") or data.get("captcha_service_url")
-        surl = data.get("captcha_surl") or api_server
-        action = data.get("captcha_action")
-        min_score = data.get("captcha_min_score") or data.get("captcha_score")
-        data_s = data.get("captcha_data_s") or data.get("captcha_data-s") or data.get("captcha_s")
-        cdata = data.get("captcha_cdata") or data.get("captcha_data")
-        pagedata = data.get("captcha_pagedata") or data.get("captcha_chl_page_data")
-        invisible = data.get("captcha_invisible")
-        enterprise = data.get("captcha_enterprise")
+        service = _get_captcha_field(data, "captcha_service") or "hcaptcha"
+        api_server = _get_captcha_field(data, "captcha_api_server", "captcha_service_url")
+        surl = _get_captcha_field(data, "captcha_surl") or api_server
+        action = _get_captcha_field(data, "captcha_action")
+        min_score = _get_captcha_field(data, "captcha_min_score", "captcha_score")
+        data_s = _get_captcha_field(data, "captcha_data_s", "captcha_data-s", "captcha_s")
+        cdata = _get_captcha_field(data, "captcha_cdata", "captcha_data")
+        pagedata = _get_captcha_field(data, "captcha_pagedata", "captcha_chl_page_data")
+        invisible = _get_captcha_field(data, "captcha_invisible")
+        enterprise = _get_captcha_field(data, "captcha_enterprise")
+        rqdata = _get_captcha_field(data, "captcha_rqdata", "rqdata")
+        rqtoken = _get_captcha_field(data, "captcha_rqtoken", "rqtoken")
         return {
             "service": service,
             "sitekey": sitekey,
-            "rqdata": data.get("captcha_rqdata"),
-            "rqtoken": data.get("captcha_rqtoken"),
+            "rqdata": rqdata,
+            "rqtoken": rqtoken,
             "surl": surl,
             "api_server": api_server,
             "action": action,
@@ -279,33 +379,44 @@ class DiscordWorker:
             if add_friend:
                 self.log(f"[Dry-Run] Would send friend request to {user_id}.")
                 if friend_delay_max > 0:
-                    delay = random.randint(friend_delay_min, friend_delay_max)
+                    delay = gaussian_delay(friend_delay_min, friend_delay_max)
                     if delay > 0:
-                        self.log(f"[Dry-Run] Waiting {delay}s before DM to {user_id}.")
+                        self.log(f"[Dry-Run] Waiting {int(delay)}s before DM to {user_id}.")
                         self._sleep_with_stop(delay)
             return True, final_msg
+        user_agent = USER_AGENT
         headers = {
             "Authorization": token,
             "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "User-Agent": user_agent
         }
         set_super_properties_header(headers, self.db)
-        with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+        with httpx_client(
+            proxy,
+            headers=headers,
+            timeout=httpx.Timeout(10.0),
+            cookie_db=self.db,
+            cookie_token=lambda: token,
+        ) as client:
             try:
+                if not self._ensure_gateway_connected(token):
+                    return False, "Gateway offline"
                 refreshed = False
                 # Optional: send friend request.
                 if add_friend:
                     self.send_friend_request(client, user_id)
                     if friend_delay_max > 0:
-                        delay = random.randint(friend_delay_min, friend_delay_max)
+                        delay = gaussian_delay(friend_delay_min, friend_delay_max)
                         if delay > 0:
-                            self.log(f"[Friend Request] Waiting {delay}s before DM to {user_id}.")
+                            self.log(f"[Friend Request] Waiting {int(delay)}s before DM to {user_id}.")
                             self._sleep_with_stop(delay)
 
                 # Open DM channel.
                 url_channel = "https://discord.com/api/v9/users/@me/channels"
                 channel_id = None
                 for attempt in range(self.max_retries + 1):
+                    if not self._ensure_gateway_connected(token):
+                        return False, "Gateway offline"
                     start = time.monotonic()
                     response = client.post(url_channel, json={"recipient_id": user_id})
                     self._record_request(time.monotonic() - start, response)
@@ -354,6 +465,10 @@ class DiscordWorker:
                 # Message randomization (templates + spintax).
                 final_msg = self.render_message(message_template)
 
+                # Prefetch last messages + ack before sending DM.
+                self._prefetch_channel_messages(client, channel_id, limit=50)
+                self._post_ack(client, channel_id=channel_id)
+
                 # Trigger typing indicator then wait a bit before sending.
                 try:
                     start = time.monotonic()
@@ -361,9 +476,11 @@ class DiscordWorker:
                     self._record_request(time.monotonic() - start, typing_resp)
                 except Exception:
                     pass
-                self._sleep_with_stop(random.uniform(2.0, 5.0))
+                self._sleep_with_stop(self._typing_delay_seconds(final_msg))
 
                 for attempt in range(self.max_retries + 1):
+                    if not self._ensure_gateway_connected(token):
+                        return False, "Gateway offline"
                     start = time.monotonic()
                     msg_resp = client.post(msg_url, json={"content": final_msg})
                     self._record_request(time.monotonic() - start, msg_resp)
@@ -373,6 +490,20 @@ class DiscordWorker:
                             continue
                         return False, "Unauthorized (token)"
                     if msg_resp.status_code == 200:
+                        try:
+                            msg_id = msg_resp.json().get("id")
+                        except Exception:
+                            msg_id = None
+                        if msg_id:
+                            self._post_ack(client, channel_id=channel_id, message_id=msg_id)
+                        if self.telemetry:
+                            self.telemetry.send_science(
+                                token,
+                                user_agent,
+                                "dm_sent",
+                                properties={"user_id": user_id, "channel_id": channel_id},
+                                proxy=proxy,
+                            )
                         return True, "Success"
                     if msg_resp.status_code == 429:
                         self._wait_for_rate_limit(msg_resp, attempt)
@@ -395,6 +526,20 @@ class DiscordWorker:
                                 continue
                             return False, "Unauthorized (token)"
                         if retry_resp.status_code == 200:
+                            try:
+                                msg_id = retry_resp.json().get("id")
+                            except Exception:
+                                msg_id = None
+                            if msg_id:
+                                self._post_ack(client, channel_id=channel_id, message_id=msg_id)
+                            if self.telemetry:
+                                self.telemetry.send_science(
+                                    token,
+                                    user_agent,
+                                    "dm_sent",
+                                    properties={"user_id": user_id, "channel_id": channel_id},
+                                    proxy=proxy,
+                                )
                             return True, "Success"
                         if retry_resp.status_code == 429:
                             self._wait_for_rate_limit(retry_resp, attempt)
@@ -452,6 +597,12 @@ class DiscordWorker:
                 acc_id, _, token, proxy, _, limit, sent_today, _, _, _, _ = acc
                 
                 if sent_today >= limit: continue
+                blocked, remaining_hours = self._is_dm_warmup_blocked(acc_id)
+                if blocked:
+                    self.log(
+                        f"[Warmup] Account {acc_id}: DM blocked for {remaining_hours:.1f}h (new account)."
+                    )
+                    continue
 
                 if account_min_interval_seconds > 0:
                     remaining = self.db.get_account_dm_cooldown(acc_id, account_min_interval_seconds)
@@ -494,13 +645,13 @@ class DiscordWorker:
                     self.db.record_last_dm(acc_id, u_id)
                     self.log(f"[OK] DM sent to {u_id}")
                 else:
-                    if self._is_captcha_error(msg):
-                        self._schedule_captcha_retry(t_id, u_id, msg)
-                    else:
-                        self.db.update_target_status(t_id, "Failed", msg)
-                        self.log(f"[!] Error {u_id}: {msg}")
+                if self._is_captcha_error(msg):
+                    self._schedule_captcha_retry(t_id, u_id, msg)
+                else:
+                    self.db.update_target_status(t_id, "Failed", msg)
+                    self.log(f"[!] Error {u_id}: {msg}")
 
-                self._sleep_with_stop(random.randint(delay_min, delay_max))
+                self._sleep_with_stop(gaussian_delay(delay_min, delay_max))
 
             if self.is_running and not did_send_attempt:
                 self.log("[Mission] All accounts reached the daily limit. Sleeping before next attempt.")

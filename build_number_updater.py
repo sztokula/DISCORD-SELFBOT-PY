@@ -5,14 +5,10 @@ from datetime import datetime, timedelta
 from urllib.parse import urljoin
 
 from proxy_utils import httpx_client
+from client_identity import USER_AGENT
+from super_properties import ensure_discord_headers
 
 LOGIN_URL = "https://discord.com/login"
-DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
-)
-
 BUILD_NUMBER_PATTERNS = [
     re.compile(r'build_number"\s*:\s*"(\d+)"'),
     re.compile(r"build_number\s*:\s*(\d+)"),
@@ -45,7 +41,8 @@ class BuildNumberUpdater:
         if not force and not self._should_check():
             return False
 
-        headers = {"User-Agent": DEFAULT_USER_AGENT}
+        headers = {"User-Agent": USER_AGENT}
+        ensure_discord_headers(headers, self.db, add_super_properties=False)
         js_urls = []
         build_number = None
         source_url = None
