@@ -2,6 +2,8 @@ import time
 
 import httpx
 
+from proxy_utils import normalize_proxy
+
 class TokenManager:
     def __init__(self, db_manager, log_callback, metrics=None):
         self.db = db_manager
@@ -26,6 +28,9 @@ class TokenManager:
     def _check_proxy_alive(self, proxy):
         if not proxy:
             return False, "Proxy is empty."
+        proxy = normalize_proxy(proxy)
+        if not proxy:
+            return False, "Invalid proxy format."
         cached = self._proxy_check_cache.get(proxy)
         now = time.monotonic()
         if cached and (now - cached["ts"]) < self._proxy_check_ttl_seconds:
@@ -49,6 +54,10 @@ class TokenManager:
     def _fetch_token_info(self, token, proxy=None):
         if self._is_proxy_required() and not proxy:
             return "retry", "Proxy is required."
+        if proxy:
+            proxy = normalize_proxy(proxy)
+            if not proxy:
+                return "retry", "Invalid proxy format."
         url = "https://discord.com/api/v9/users/@me"
         headers = {"Authorization": token}
         proxies = {"all://": proxy} if proxy else None

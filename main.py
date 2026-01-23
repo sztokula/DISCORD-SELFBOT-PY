@@ -19,6 +19,7 @@ from token_manager import TokenManager
 from updater import UpdateManager, UpdateError
 from metrics import HealthMetrics
 from profile_updater import ProfileUpdater
+from proxy_utils import normalize_proxy
 import httpx
 
 ctk.set_appearance_mode("Dark")
@@ -355,9 +356,15 @@ class MassDMApp(ctk.CTk):
             return self.require_proxy_var.get()
         return self._get_setting_bool("require_proxy", True)
 
+    def _normalize_proxy(self, proxy):
+        return normalize_proxy(proxy)
+
     def _check_proxy_alive(self, proxy):
         if not proxy:
             return False, "Proxy is empty."
+        proxy = self._normalize_proxy(proxy)
+        if not proxy:
+            return False, "Invalid proxy format."
         with self._proxy_check_lock:
             cached = self._proxy_check_cache.get(proxy)
         now = datetime.now().timestamp()
@@ -381,13 +388,7 @@ class MassDMApp(ctk.CTk):
         return ok, err
 
     def _is_proxy_format_valid(self, proxy):
-        if not proxy:
-            return False
-        parsed = urlparse(proxy)
-        if parsed.scheme and parsed.hostname and parsed.port:
-            return parsed.scheme in {"http", "https", "socks5"}
-        parsed = urlparse(f"http://{proxy}")
-        return bool(parsed.hostname and parsed.port)
+        return bool(self._normalize_proxy(proxy))
 
     def _restore_proxy_verified_accounts(self):
         if not self._is_proxy_required():
@@ -398,8 +399,14 @@ class MassDMApp(ctk.CTk):
             status_value = (status or "").strip().casefold()
             if status_value != "unverified":
                 continue
-            if not proxy or not self._is_proxy_format_valid(proxy):
+            if not proxy:
                 continue
+            normalized = self._normalize_proxy(proxy)
+            if not normalized:
+                continue
+            if normalized != proxy:
+                self.db.update_account_proxy(acc_id, normalized)
+                proxy = normalized
             ok, _err = self._check_proxy_alive(proxy)
             if ok:
                 self.db.update_account_status(acc_id, "Active")
@@ -424,14 +431,20 @@ class MassDMApp(ctk.CTk):
             if not proxy:
                 failures.append((acc_id, "missing proxy"))
                 continue
-            if not self._is_proxy_format_valid(proxy):
+            normalized = self._normalize_proxy(proxy)
+            if not normalized:
                 failures.append((acc_id, "invalid proxy format"))
                 continue
+            if normalized != proxy:
+                self.db.update_account_proxy(acc_id, normalized)
+                proxy = normalized
             ok, err = self._check_proxy_alive(proxy)
             if not ok:
                 failures.append((acc_id, err))
                 continue
-            valid_accounts.append(acc)
+            acc_list = list(acc)
+            acc_list[3] = proxy
+            valid_accounts.append(tuple(acc_list))
         if failures:
             self.log_warning(
                 f"[Proxy] {context_label}: skipped {len(failures)} account(s) with bad proxy."
@@ -447,18 +460,21 @@ class MassDMApp(ctk.CTk):
 
     def _ensure_scraper_proxy(self, proxy, context_label):
         if not self._is_proxy_required():
-            return True
+            return proxy
         if not proxy:
             self.log_error(f"[Proxy] Scraper proxy required for {context_label}.")
-            return False
-        if not self.validate_proxy(proxy):
+            return None
+        normalized = self._normalize_proxy(proxy)
+        if not normalized:
             self.log_error(f"[Proxy] Invalid scraper proxy format ({context_label}).")
-            return False
-        ok, err = self._check_proxy_alive(proxy)
+            return None
+        ok, err = self._check_proxy_alive(normalized)
         if not ok:
             self.log_error(f"[Proxy] Scraper proxy error ({context_label}): {err}")
-            return False
-        return True
+            return None
+        if normalized != proxy:
+            self.db.set_setting("scrape_proxy", normalized)
+        return normalized
 
     def _parse_delay_range(self, min_input, max_input, label, cast_type=int, min_value=0.0):
         min_raw = min_input.get().strip()
@@ -666,6 +682,18 @@ class MassDMApp(ctk.CTk):
         scrape_proxy = None
         if hasattr(self, "scrape_proxy_input") and self.scrape_proxy_input.winfo_exists():
             scrape_proxy = self.scrape_proxy_input.get().strip()
+        if scrape_proxy:
+            normalized = self._normalize_proxy(scrape_proxy)
+            if not normalized:
+                self.log_error("Invalid scrape proxy format.")
+                if hasattr(self, "scrape_proxy_input"):
+                    self._set_input_valid(self.scrape_proxy_input, False)
+                return
+            scrape_proxy = normalized
+            if hasattr(self, "scrape_proxy_input"):
+                self.scrape_proxy_input.delete(0, "end")
+                self.scrape_proxy_input.insert(0, scrape_proxy)
+                self._set_input_valid(self.scrape_proxy_input, True)
         self.db.set_setting("scrape_proxy", scrape_proxy or None)
 
     def _load_scrape_settings(self):
@@ -688,6 +716,12 @@ class MassDMApp(ctk.CTk):
             self.scrape_range_input.delete(0, "end")
             self.scrape_range_input.insert(0, range_value)
         scrape_proxy = self.db.get_setting("scrape_proxy", "").strip()
+        if scrape_proxy:
+            normalized = self._normalize_proxy(scrape_proxy)
+            if normalized:
+                if normalized != scrape_proxy:
+                    self.db.set_setting("scrape_proxy", normalized)
+                scrape_proxy = normalized
         if hasattr(self, "scrape_proxy_input") and self.scrape_proxy_input.winfo_exists():
             self.scrape_proxy_input.delete(0, "end")
             if scrape_proxy:
@@ -1247,21 +1281,21 @@ class MassDMApp(ctk.CTk):
         if not proxy:
             self._set_input_valid(input_widget, True)
             return True
-        parsed = urlparse(proxy)
-        if parsed.scheme and parsed.hostname and parsed.port:
-            if parsed.scheme not in {"http", "https", "socks5"}:
-                self.log_error("Invalid proxy format.")
-                self._set_input_valid(input_widget, False)
-                return False
-            self._set_input_valid(input_widget, True)
-            return True
-        parsed = urlparse(f"http://{proxy}")
-        if parsed.hostname and parsed.port:
-            self._set_input_valid(input_widget, True)
-            return True
-        self.log_error("Invalid proxy format.")
-        self._set_input_valid(input_widget, False)
-        return False
+        normalized = self._normalize_proxy(proxy)
+        if not normalized:
+            self.log_error("Invalid proxy format.")
+            self._set_input_valid(input_widget, False)
+            return False
+        if input_widget is not None:
+            try:
+                current = input_widget.get().strip()
+            except Exception:
+                current = proxy
+            if normalized != current:
+                input_widget.delete(0, "end")
+                input_widget.insert(0, normalized)
+        self._set_input_valid(input_widget, True)
+        return True
 
     def _parse_tokens_from_text(self, raw_text):
         tokens = []
@@ -1292,8 +1326,9 @@ class MassDMApp(ctk.CTk):
             value = line.strip()
             if not value:
                 continue
-            if self._is_proxy_format_valid(value):
-                proxies.append(value)
+            normalized = self._normalize_proxy(value)
+            if normalized:
+                proxies.append(normalized)
             else:
                 invalid.append(value)
         return proxies, invalid
@@ -1320,10 +1355,11 @@ class MassDMApp(ctk.CTk):
             if not self._is_token_format_valid(token):
                 invalid.append(value)
                 continue
-            if not self._is_proxy_format_valid(proxy):
+            normalized = self._normalize_proxy(proxy)
+            if not normalized:
                 invalid.append(value)
                 continue
-            pairs.append((token, proxy))
+            pairs.append((token, normalized))
         unique_pairs = []
         seen_tokens = set()
         for token, proxy in pairs:
@@ -1522,6 +1558,8 @@ class MassDMApp(ctk.CTk):
             return
         if not self.validate_proxy(proxy, self.proxy_input):
             return
+        if proxy:
+            proxy = self._normalize_proxy(proxy)
         try:
             dm_limit = int(dm_limit_raw) if dm_limit_raw else 15
         except ValueError:
@@ -1998,11 +2036,12 @@ class MassDMApp(ctk.CTk):
         else:
             scrape_proxy = self.db.get_setting("scrape_proxy", "").strip()
         def _scrape_with_proxy_check():
-            if not self._ensure_scraper_proxy(scrape_proxy, "channel scrape"):
+            normalized_proxy = self._ensure_scraper_proxy(scrape_proxy, "channel scrape")
+            if not normalized_proxy:
                 if on_complete:
                     on_complete(False)
                 return
-            self.scraper.scrape_history(token, channel_id, limit, on_complete, proxy=scrape_proxy)
+            self.scraper.scrape_history(token, channel_id, limit, on_complete, proxy=normalized_proxy)
         thread = threading.Thread(
             target=_scrape_with_proxy_check,
         )
@@ -2055,11 +2094,12 @@ class MassDMApp(ctk.CTk):
         else:
             scrape_proxy = self.db.get_setting("scrape_proxy", "").strip()
         def _scrape_with_proxy_check():
-            if not self._ensure_scraper_proxy(scrape_proxy, "guild scrape"):
+            normalized_proxy = self._ensure_scraper_proxy(scrape_proxy, "guild scrape")
+            if not normalized_proxy:
                 if on_complete:
                     on_complete(False)
                 return
-            self.scraper.scrape_guild_members(token, guild_id, limit, on_complete, proxy=scrape_proxy)
+            self.scraper.scrape_guild_members(token, guild_id, limit, on_complete, proxy=normalized_proxy)
         thread = threading.Thread(
             target=_scrape_with_proxy_check,
         )
@@ -2696,8 +2736,15 @@ class MassDMApp(ctk.CTk):
         ctk.CTkLabel(self.acc_frame, text="Discord Token").grid(row=1, column=0, padx=10, pady=(0, 2), sticky="w")
         self.token_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Discord Token", width=350)
         self.token_input.grid(row=2, column=0, padx=10, pady=5)
-        ctk.CTkLabel(self.acc_frame, text="Proxy (http://user:pass@ip:port)").grid(row=3, column=0, padx=10, pady=(0, 2), sticky="w")
-        self.proxy_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Proxy (http://user:pass@ip:port)", width=350)
+        ctk.CTkLabel(
+            self.acc_frame,
+            text="Proxy (http://user:pass@ip:port or host:port:user:pass)",
+        ).grid(row=3, column=0, padx=10, pady=(0, 2), sticky="w")
+        self.proxy_input = ctk.CTkEntry(
+            self.acc_frame,
+            placeholder_text="Proxy (http://user:pass@ip:port or host:port:user:pass)",
+            width=350,
+        )
         self.proxy_input.grid(row=4, column=0, padx=10, pady=5)
         self.require_proxy_toggle = ctk.CTkCheckBox(
             self.acc_frame,
@@ -3204,7 +3251,11 @@ class MassDMApp(ctk.CTk):
         self.scrape_btn = ctk.CTkButton(self.scrape_frame, text="Scrape Users", command=self.start_scraping)
         self.scrape_btn.grid(row=2, column=2, padx=10, pady=5)
         ctk.CTkLabel(self.scrape_frame, text="Scrape proxy").grid(row=3, column=0, padx=10, pady=(0, 2), sticky="w")
-        self.scrape_proxy_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="http://user:pass@ip:port", width=350)
+        self.scrape_proxy_input = ctk.CTkEntry(
+            self.scrape_frame,
+            placeholder_text="http://user:pass@ip:port or host:port:user:pass",
+            width=350,
+        )
         self.scrape_proxy_input.grid(row=4, column=0, padx=10, pady=5, columnspan=2, sticky="w")
         ctk.CTkLabel(self.scrape_frame, text="Guild ID").grid(row=5, column=0, padx=10, pady=(0, 2), sticky="w")
         self.scrape_guild_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="Guild ID", width=350)

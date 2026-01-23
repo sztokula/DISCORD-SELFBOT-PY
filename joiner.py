@@ -117,28 +117,26 @@ class DiscordJoiner:
                         )
                         return True, "Success", guild_id
                     if response.status_code in {400, 403}:
-                        captcha_info = self._extract_captcha(response)
-                        if captcha_info and self.captcha_solver:
-                            solved, token_or_err = self.captcha_solver.solve_captcha(captcha_info)
-                            if solved:
-                                payload = {"captcha_key": token_or_err}
-                                if captcha_info.get("rqtoken"):
-                                    payload["captcha_rqtoken"] = captcha_info["rqtoken"]
-                                start = time.monotonic()
-                                retry_resp = client.post(url, json=payload)
-                                self._record_request(time.monotonic() - start, retry_resp)
-                                if retry_resp.status_code == 200:
-                                    guild_id = self._extract_guild_id(retry_resp)
-                                    self._handle_post_join(
-                                        client,
-                                        guild_id,
-                                        auto_accept_rules,
-                                        auto_onboarding,
-                                        role_whitelist,
-                                    )
-                                    return True, "Success (captcha)", guild_id
-                                return False, f"Post-captcha error: {retry_resp.status_code}", None
-                            return False, f"Captcha error: {token_or_err}", None
+                        captcha_payload, err, user_agent = self._solve_captcha_payload(response)
+                        if captcha_payload:
+                            if user_agent:
+                                client.headers["User-Agent"] = user_agent
+                            start = time.monotonic()
+                            retry_resp = client.post(url, json=captcha_payload)
+                            self._record_request(time.monotonic() - start, retry_resp)
+                            if retry_resp.status_code == 200:
+                                guild_id = self._extract_guild_id(retry_resp)
+                                self._handle_post_join(
+                                    client,
+                                    guild_id,
+                                    auto_accept_rules,
+                                    auto_onboarding,
+                                    role_whitelist,
+                                )
+                                return True, "Success (captcha)", guild_id
+                            return False, f"Post-captcha error: {retry_resp.status_code}", None
+                        if err:
+                            return False, err, None
                         return False, "Verification required (Captcha/Phone)", None
                     if response.status_code == 429:
                         retry_after = self._get_retry_after(response)
@@ -312,11 +310,29 @@ class DiscordJoiner:
         if not sitekey:
             return None
         service = data.get("captcha_service") or "hcaptcha"
+        api_server = data.get("captcha_api_server") or data.get("captcha_service_url")
+        surl = data.get("captcha_surl") or api_server
+        action = data.get("captcha_action")
+        min_score = data.get("captcha_min_score") or data.get("captcha_score")
+        data_s = data.get("captcha_data_s") or data.get("captcha_data-s") or data.get("captcha_s")
+        cdata = data.get("captcha_cdata") or data.get("captcha_data")
+        pagedata = data.get("captcha_pagedata") or data.get("captcha_chl_page_data")
+        invisible = data.get("captcha_invisible")
+        enterprise = data.get("captcha_enterprise")
         return {
             "service": service,
             "sitekey": sitekey,
             "rqdata": data.get("captcha_rqdata"),
             "rqtoken": data.get("captcha_rqtoken"),
+            "surl": surl,
+            "api_server": api_server,
+            "action": action,
+            "min_score": min_score,
+            "data_s": data_s,
+            "cdata": cdata,
+            "pagedata": pagedata,
+            "invisible": invisible,
+            "enterprise": enterprise,
             "url": "https://discord.com",
         }
 
@@ -351,19 +367,34 @@ class DiscordJoiner:
             return data.get("guild_id") or guild.get("id")
         return None
 
+    @staticmethod
+    def _normalize_captcha_result(token_or_err):
+        if isinstance(token_or_err, dict):
+            token = (
+                token_or_err.get("token")
+                or token_or_err.get("gRecaptchaResponse")
+                or token_or_err.get("response")
+            )
+            user_agent = token_or_err.get("userAgent") or token_or_err.get("useragent")
+            return token, user_agent
+        return token_or_err, None
+
     def _solve_captcha_payload(self, response):
         captcha_info = self._extract_captcha(response)
         if not captcha_info:
-            return None, "Captcha required."
+            return None, "Captcha required.", None
         if not self.captcha_solver:
-            return None, "Captcha solver not configured."
+            return None, "Captcha solver not configured.", None
         solved, token_or_err = self.captcha_solver.solve_captcha(captcha_info)
         if not solved:
-            return None, f"Captcha error: {token_or_err}"
-        payload = {"captcha_key": token_or_err}
+            return None, f"Captcha error: {token_or_err}", None
+        token, user_agent = self._normalize_captcha_result(token_or_err)
+        if not token:
+            return None, "Missing captcha token in response.", None
+        payload = {"captcha_key": token}
         if captcha_info.get("rqtoken"):
             payload["captcha_rqtoken"] = captcha_info["rqtoken"]
-        return payload, None
+        return payload, None, user_agent
 
     def _submit_with_captcha(self, client, method, url, payload):
         for attempt in range(self.max_retries + 1):
@@ -378,10 +409,12 @@ class DiscordJoiner:
                 self._sleep_with_stop(wait_time)
                 continue
             if resp.status_code in {400, 403}:
-                captcha_payload, err = self._solve_captcha_payload(resp)
+                captcha_payload, err, user_agent = self._solve_captcha_payload(resp)
                 if not captcha_payload:
                     self.log(f"[Captcha] Failed: {err}")
                     return False
+                if user_agent:
+                    client.headers["User-Agent"] = user_agent
                 retry_payload = dict(payload)
                 retry_payload.update(captcha_payload)
                 start = time.monotonic()

@@ -22,6 +22,15 @@ class CaptchaSolver:
         normalized = (provider or "").strip().lower()
         return self.PROVIDER_ALIASES.get(normalized, provider)
 
+    @staticmethod
+    def _get_field(captcha_info: dict, *keys):
+        for key in keys:
+            if key in captcha_info:
+                value = captcha_info.get(key)
+                if value not in (None, ""):
+                    return value
+        return None
+
     def get_provider(self) -> str:
         provider = self._normalize_provider(self.db.get_setting("captcha_provider", "capsolver"))
         if provider not in self.SUPPORTED_PROVIDERS:
@@ -55,11 +64,25 @@ class CaptchaSolver:
         if not api_key:
             return False, "Missing API key."
 
-        service = (captcha_info.get("service") or "hcaptcha").lower()
+        service = (captcha_info.get("service") or "hcaptcha").lower().strip().replace("-", "_")
         if service in {"hcaptcha", "hcaptcha_enterprise"}:
             return self._solve_hcaptcha(provider, api_key, captcha_info)
-        if service in {"funcaptcha", "arkose", "arkoselabs", "arkose-labs"}:
+        if service in {"funcaptcha", "arkose", "arkoselabs", "arkose_labs"}:
             return self._solve_arkose(provider, api_key, captcha_info)
+        if service in {
+            "recaptcha",
+            "recaptcha_v2",
+            "recaptcha_v2_invisible",
+            "recaptcha_v3",
+            "recaptcha_enterprise",
+            "recaptcha_v2_enterprise",
+            "recaptcha_v3_enterprise",
+            "recaptcha_enterprise_v2",
+            "recaptcha_enterprise_v3",
+        }:
+            return self._solve_recaptcha(provider, api_key, captcha_info, service)
+        if service in {"turnstile", "cloudflare_turnstile"}:
+            return self._solve_turnstile(provider, api_key, captcha_info)
         return False, f"Unsupported captcha type: {service}"
 
     def _solve_hcaptcha(self, provider: str, api_key: str, captcha_info: dict) -> Tuple[bool, str]:
@@ -78,6 +101,40 @@ class CaptchaSolver:
             return self._twocaptcha_arkose(api_key, captcha_info)
         if provider == "anticaptcha":
             return self._anticaptcha_arkose(api_key, captcha_info)
+        return False, "Unsupported provider."
+
+    def _solve_recaptcha(self, provider: str, api_key: str, captcha_info: dict, service: str) -> Tuple[bool, str]:
+        service = service.lower()
+        version = (self._get_field(captcha_info, "version", "recaptcha_version") or "").lower()
+        min_score = self._get_field(captcha_info, "min_score", "minScore")
+        action = self._get_field(captcha_info, "action", "pageAction", "page_action")
+        is_v3 = service in {"recaptcha_v3", "recaptcha_v3_enterprise", "recaptcha_enterprise_v3"} or version == "v3" or min_score is not None
+        is_enterprise = "enterprise" in service or bool(self._get_field(captcha_info, "enterprise", "isEnterprise"))
+        is_invisible = "invisible" in service or bool(self._get_field(captcha_info, "invisible", "isInvisible"))
+
+        if provider == "capsolver":
+            return self._capsolver_recaptcha(api_key, captcha_info, is_v3, is_enterprise, is_invisible, action)
+        if provider == "2captcha":
+            return self._twocaptcha_recaptcha(
+                api_key,
+                captcha_info,
+                is_v3=is_v3,
+                is_enterprise=is_enterprise,
+                is_invisible=is_invisible,
+                action=action,
+                min_score=min_score,
+            )
+        if provider == "anticaptcha":
+            return self._anticaptcha_recaptcha(api_key, captcha_info, is_v3, is_enterprise, is_invisible, action, min_score)
+        return False, "Unsupported provider."
+
+    def _solve_turnstile(self, provider: str, api_key: str, captcha_info: dict) -> Tuple[bool, str]:
+        if provider == "capsolver":
+            return self._capsolver_turnstile(api_key, captcha_info)
+        if provider == "2captcha":
+            return self._twocaptcha_turnstile(api_key, captcha_info)
+        if provider == "anticaptcha":
+            return self._anticaptcha_turnstile(api_key, captcha_info)
         return False, "Unsupported provider."
 
     def _capsolver_balance(self, api_key: str) -> Tuple[bool, str]:
@@ -200,12 +257,15 @@ class CaptchaSolver:
                 return False, str(exc)
             if data.get("status") == "ready":
                 solution = data.get("solution", {})
+                user_agent = solution.get("userAgent") or solution.get("useragent")
                 token = (
                     solution.get("gRecaptchaResponse")
                     or solution.get("token")
                     or solution.get("response")
                 )
                 if token:
+                    if user_agent:
+                        return True, {"token": token, "userAgent": user_agent}
                     return True, token
                 return False, "Missing captcha token in response."
             if data.get("status") == "failed":
@@ -246,8 +306,11 @@ class CaptchaSolver:
                 return False, data.get("errorDescription", "Anti-Captcha failed")
             if data.get("status") == "ready":
                 solution = data.get("solution", {})
+                user_agent = solution.get("userAgent") or solution.get("useragent")
                 token = solution.get("gRecaptchaResponse") or solution.get("token")
                 if token:
+                    if user_agent:
+                        return True, {"token": token, "userAgent": user_agent}
                     return True, token
                 return False, "Missing captcha token in response."
         return False, "Captcha wait timeout."
@@ -276,7 +339,181 @@ class CaptchaSolver:
         rqdata = captcha_info.get("rqdata")
         if rqdata:
             params["data[blob]"] = rqdata
+        surl = captcha_info.get("surl") or captcha_info.get("api_server")
+        if surl:
+            params["surl"] = surl
         return self._twocaptcha_solve(params)
+
+    def _twocaptcha_recaptcha(
+        self,
+        api_key: str,
+        captcha_info: dict,
+        *,
+        is_v3: bool,
+        is_enterprise: bool,
+        is_invisible: bool,
+        action: Optional[str],
+        min_score: Optional[object],
+    ) -> Tuple[bool, str]:
+        params = {
+            "key": api_key,
+            "method": "userrecaptcha",
+            "googlekey": captcha_info["sitekey"],
+            "pageurl": captcha_info["url"],
+            "json": 1,
+        }
+        if is_v3:
+            params["version"] = "v3"
+            if min_score is None:
+                min_score = "0.3"
+            params["min_score"] = min_score
+            if action:
+                params["action"] = action
+        else:
+            if is_invisible:
+                params["invisible"] = 1
+        if is_enterprise:
+            params["enterprise"] = 1
+        data_s = self._get_field(captcha_info, "data_s", "data-s", "recaptchaDataSValue")
+        if data_s:
+            params["data-s"] = data_s
+        cookies = self._get_field(captcha_info, "cookies")
+        if cookies:
+            params["cookies"] = cookies
+        user_agent = self._get_field(captcha_info, "userAgent", "user_agent")
+        if user_agent:
+            params["userAgent"] = user_agent
+        api_domain = self._get_field(captcha_info, "domain", "apiDomain", "api_domain")
+        if api_domain:
+            params["domain"] = api_domain
+        return self._twocaptcha_solve(params)
+
+    def _twocaptcha_turnstile(self, api_key: str, captcha_info: dict) -> Tuple[bool, str]:
+        params = {
+            "key": api_key,
+            "method": "turnstile",
+            "sitekey": captcha_info["sitekey"],
+            "pageurl": captcha_info["url"],
+            "json": 1,
+        }
+        action = self._get_field(captcha_info, "action", "pageAction", "page_action")
+        if action:
+            params["action"] = action
+        data = self._get_field(captcha_info, "data", "cdata", "cData")
+        if data:
+            params["data"] = data
+        pagedata = self._get_field(captcha_info, "pagedata", "pageData", "chlPageData", "chl_page_data")
+        if pagedata:
+            params["pagedata"] = pagedata
+        user_agent = self._get_field(captcha_info, "userAgent", "user_agent")
+        if user_agent:
+            params["userAgent"] = user_agent
+        return self._twocaptcha_solve(params)
+
+    def _capsolver_recaptcha(
+        self,
+        api_key: str,
+        captcha_info: dict,
+        is_v3: bool,
+        is_enterprise: bool,
+        is_invisible: bool,
+        action: Optional[str],
+    ) -> Tuple[bool, str]:
+        if is_v3:
+            task_type = "ReCaptchaV3EnterpriseTaskProxyLess" if is_enterprise else "ReCaptchaV3TaskProxyLess"
+        else:
+            task_type = "ReCaptchaV2EnterpriseTaskProxyLess" if is_enterprise else "ReCaptchaV2TaskProxyLess"
+        task = {
+            "type": task_type,
+            "websiteURL": captcha_info["url"],
+            "websiteKey": captcha_info["sitekey"],
+        }
+        if is_invisible and not is_v3:
+            task["isInvisible"] = True
+        if action:
+            task["pageAction"] = action
+        data_s = self._get_field(captcha_info, "data_s", "data-s", "recaptchaDataSValue", "s")
+        if data_s:
+            task["enterprisePayload"] = {"s": data_s}
+        api_domain = self._get_field(captcha_info, "apiDomain", "api_domain", "domain")
+        if api_domain:
+            task["apiDomain"] = api_domain
+        return self._capsolver_solve(api_key, task)
+
+    def _capsolver_turnstile(self, api_key: str, captcha_info: dict) -> Tuple[bool, str]:
+        task = {
+            "type": "AntiTurnstileTaskProxyLess",
+            "websiteURL": captcha_info["url"],
+            "websiteKey": captcha_info["sitekey"],
+        }
+        metadata = {}
+        action = self._get_field(captcha_info, "action", "pageAction", "page_action")
+        if action:
+            metadata["action"] = action
+        cdata = self._get_field(captcha_info, "cdata", "cData", "data")
+        if cdata:
+            metadata["cdata"] = cdata
+        if metadata:
+            task["metadata"] = metadata
+        return self._capsolver_solve(api_key, task)
+
+    def _anticaptcha_recaptcha(
+        self,
+        api_key: str,
+        captcha_info: dict,
+        is_v3: bool,
+        is_enterprise: bool,
+        is_invisible: bool,
+        action: Optional[str],
+        min_score: Optional[object],
+    ) -> Tuple[bool, str]:
+        if is_v3:
+            task = {
+                "type": "RecaptchaV3TaskProxyless",
+                "websiteURL": captcha_info["url"],
+                "websiteKey": captcha_info["sitekey"],
+                "minScore": float(min_score) if min_score is not None else 0.3,
+            }
+            if action:
+                task["pageAction"] = action
+            if is_enterprise:
+                task["isEnterprise"] = True
+        else:
+            task_type = "RecaptchaV2EnterpriseTaskProxyless" if is_enterprise else "RecaptchaV2TaskProxyless"
+            task = {
+                "type": task_type,
+                "websiteURL": captcha_info["url"],
+                "websiteKey": captcha_info["sitekey"],
+            }
+            if is_invisible:
+                task["isInvisible"] = True
+            data_s = self._get_field(captcha_info, "data_s", "data-s", "recaptchaDataSValue", "s")
+            if data_s:
+                if is_enterprise:
+                    task["enterprisePayload"] = {"s": data_s}
+                else:
+                    task["recaptchaDataSValue"] = data_s
+            api_domain = self._get_field(captcha_info, "apiDomain", "api_domain", "domain")
+            if api_domain:
+                task["apiDomain"] = api_domain
+        return self._anticaptcha_solve(api_key, task)
+
+    def _anticaptcha_turnstile(self, api_key: str, captcha_info: dict) -> Tuple[bool, str]:
+        task = {
+            "type": "TurnstileTaskProxyless",
+            "websiteURL": captcha_info["url"],
+            "websiteKey": captcha_info["sitekey"],
+        }
+        action = self._get_field(captcha_info, "action", "pageAction", "page_action")
+        if action:
+            task["action"] = action
+        cdata = self._get_field(captcha_info, "cdata", "cData", "data")
+        if cdata:
+            task["cData"] = cdata
+        pagedata = self._get_field(captcha_info, "pagedata", "pageData", "chlPageData", "chl_page_data")
+        if pagedata:
+            task["chlPageData"] = pagedata
+        return self._anticaptcha_solve(api_key, task)
 
     def _twocaptcha_solve(self, params: dict) -> Tuple[bool, str]:
         try:
@@ -305,7 +542,11 @@ class CaptchaSolver:
             except Exception as exc:
                 return False, str(exc)
             if res_data.get("status") == 1:
-                return True, res_data.get("request", "")
+                token = res_data.get("request", "")
+                user_agent = res_data.get("useragent") or res_data.get("userAgent")
+                if user_agent:
+                    return True, {"token": token, "userAgent": user_agent}
+                return True, token
             if res_data.get("request") != "CAPCHA_NOT_READY":
                 return False, res_data.get("request", "2Captcha error")
         return False, "Captcha wait timeout."
