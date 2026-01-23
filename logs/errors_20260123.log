@@ -11,3 +11,6 @@
 [2026-01-23 18:41:01] [Error] [Proxy] No active accounts to test.
 [2026-01-23 18:41:01] [Error] [Proxy] No active accounts to test.
 [2026-01-23 18:41:13] [Error] [Proxy] Proxy error: Client.__init__() got an unexpected keyword argument 'proxies'
+[2026-01-23 19:38:55] [Error] Enter an account ID to remove.
+[2026-01-23 19:39:23] [Error] [Proxy] No active accounts to test.
+[2026-01-23 19:39:53] [Error] [Proxy] No active accounts to test.
