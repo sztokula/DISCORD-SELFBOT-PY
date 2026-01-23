@@ -3,6 +3,7 @@ import time
 import httpx
 
 from proxy_utils import normalize_proxy, httpx_client
+from super_properties import set_super_properties_header
 
 class TokenManager:
     def __init__(self, db_manager, log_callback, metrics=None):
@@ -41,6 +42,7 @@ class TokenManager:
                 timeout=httpx.Timeout(8.0),
                 headers={"User-Agent": "Mozilla/5.0"},
             ) as client:
+                set_super_properties_header(client.headers, self.db)
                 resp = client.get("https://discord.com/api/v9/experiments")
             if resp.status_code == 407:
                 ok, err = False, "Proxy auth failed (407)."
@@ -60,6 +62,7 @@ class TokenManager:
                 return "retry", "Invalid proxy format."
         url = "https://discord.com/api/v9/users/@me"
         headers = {"Authorization": token}
+        set_super_properties_header(headers, self.db)
         try:
             with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 start = time.monotonic()

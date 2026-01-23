@@ -5,6 +5,7 @@ import re
 from collections import deque
 from datetime import datetime, timedelta
 from proxy_utils import httpx_client
+from super_properties import set_super_properties_header
 
 class DiscordWorker:
     def __init__(self, db_manager, log_callback, metrics=None, captcha_solver=None):
@@ -120,6 +121,7 @@ class DiscordWorker:
                     return False
                 if user_agent:
                     client.headers["User-Agent"] = user_agent
+                    set_super_properties_header(client.headers, self.db, user_agent=user_agent)
                 start = time.monotonic()
                 retry_resp = client.put(url, json=captcha_payload)
                 self._record_request(time.monotonic() - start, retry_resp)
@@ -287,6 +289,7 @@ class DiscordWorker:
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
+        set_super_properties_header(headers, self.db)
         with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
             try:
                 refreshed = False
@@ -323,6 +326,7 @@ class DiscordWorker:
                             return False, err
                         if user_agent:
                             client.headers["User-Agent"] = user_agent
+                            set_super_properties_header(client.headers, self.db, user_agent=user_agent)
                         captcha_payload["recipient_id"] = user_id
                         start = time.monotonic()
                         retry_resp = client.post(url_channel, json=captcha_payload)
@@ -345,9 +349,19 @@ class DiscordWorker:
                     return False, "Rate Limit (DM channel)"
 
                 msg_url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
+                typing_url = f"https://discord.com/api/v9/channels/{channel_id}/typing"
 
                 # Message randomization (templates + spintax).
                 final_msg = self.render_message(message_template)
+
+                # Trigger typing indicator then wait a bit before sending.
+                try:
+                    start = time.monotonic()
+                    typing_resp = client.post(typing_url)
+                    self._record_request(time.monotonic() - start, typing_resp)
+                except Exception:
+                    pass
+                self._sleep_with_stop(random.uniform(2.0, 5.0))
 
                 for attempt in range(self.max_retries + 1):
                     start = time.monotonic()
@@ -369,6 +383,7 @@ class DiscordWorker:
                             return False, err
                         if user_agent:
                             client.headers["User-Agent"] = user_agent
+                            set_super_properties_header(client.headers, self.db, user_agent=user_agent)
                         payload = {"content": final_msg}
                         payload.update(captcha_payload)
                         start = time.monotonic()

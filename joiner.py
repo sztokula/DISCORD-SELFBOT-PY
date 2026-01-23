@@ -2,6 +2,7 @@ import httpx
 from proxy_utils import httpx_client
 import time
 import random
+from super_properties import set_super_properties_header
 
 class DiscordJoiner:
     def __init__(self, db_manager, log_callback, captcha_solver=None, metrics=None):
@@ -92,6 +93,7 @@ class DiscordJoiner:
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
+        set_super_properties_header(headers, self.db)
         
         try:
             with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
@@ -120,6 +122,7 @@ class DiscordJoiner:
                         if captcha_payload:
                             if user_agent:
                                 client.headers["User-Agent"] = user_agent
+                                set_super_properties_header(client.headers, self.db, user_agent=user_agent)
                             start = time.monotonic()
                             retry_resp = client.post(url, json=captcha_payload)
                             self._record_request(time.monotonic() - start, retry_resp)
@@ -414,6 +417,7 @@ class DiscordJoiner:
                     return False
                 if user_agent:
                     client.headers["User-Agent"] = user_agent
+                    set_super_properties_header(client.headers, self.db, user_agent=user_agent)
                 retry_payload = dict(payload)
                 retry_payload.update(captcha_payload)
                 start = time.monotonic()

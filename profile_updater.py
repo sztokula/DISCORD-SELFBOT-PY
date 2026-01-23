@@ -4,6 +4,7 @@ from pathlib import Path
 
 import httpx
 from proxy_utils import httpx_client
+from super_properties import set_super_properties_header
 
 
 class ProfileUpdater:
@@ -93,6 +94,7 @@ class ProfileUpdater:
                 "Content-Type": "application/json",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             }
+            set_super_properties_header(headers, self.db)
             with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 updated = False
                 for attempt in range(self.max_retries + 1):

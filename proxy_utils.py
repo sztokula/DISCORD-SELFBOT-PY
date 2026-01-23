@@ -1,8 +1,11 @@
 from urllib.parse import quote, urlparse
-import os
-import threading
 from contextlib import contextmanager
-import httpx
+from curl_cffi import requests as curl_requests
+
+try:
+    import httpx as _httpx
+except Exception:  # pragma: no cover - optional dependency for timeout conversion
+    _httpx = None
 
 VALID_PROXY_SCHEMES = {"http", "https", "socks5"}
 
@@ -127,36 +130,33 @@ def build_httpx_proxies(proxy, default_scheme="http"):
         "https://": normalized,
     }
 
-
-_HTTPX_SUPPORTS_PROXIES = "proxies" in httpx.Client.__init__.__code__.co_varnames
-_PROXY_ENV_LOCK = threading.Lock()
+def _normalize_timeout(timeout):
+    if timeout is None:
+        return None
+    if isinstance(timeout, (int, float)):
+        return float(timeout)
+    if isinstance(timeout, (tuple, list)) and len(timeout) == 2:
+        return tuple(timeout)
+    if _httpx and isinstance(timeout, _httpx.Timeout):
+        connect = timeout.connect
+        read = timeout.read
+        if connect is None and read is None:
+            return None
+        if connect is None:
+            connect = read
+        if read is None:
+            read = connect
+        return (connect, read)
+    return timeout
 
 
 @contextmanager
 def httpx_client(proxy=None, **kwargs):
     proxies = build_httpx_proxies(proxy)
-    if proxies and _HTTPX_SUPPORTS_PROXIES:
-        with httpx.Client(proxies=proxies, **kwargs) as client:
-            yield client
-        return
-    if proxies and not _HTTPX_SUPPORTS_PROXIES:
-        with _PROXY_ENV_LOCK:
-            old_http = os.environ.get("HTTP_PROXY")
-            old_https = os.environ.get("HTTPS_PROXY")
-            os.environ["HTTP_PROXY"] = proxies["http://"]
-            os.environ["HTTPS_PROXY"] = proxies["https://"]
-            try:
-                with httpx.Client(trust_env=True, **kwargs) as client:
-                    yield client
-            finally:
-                if old_http is None:
-                    os.environ.pop("HTTP_PROXY", None)
-                else:
-                    os.environ["HTTP_PROXY"] = old_http
-                if old_https is None:
-                    os.environ.pop("HTTPS_PROXY", None)
-                else:
-                    os.environ["HTTPS_PROXY"] = old_https
-        return
-    with httpx.Client(**kwargs) as client:
+    if proxies:
+        kwargs.setdefault("proxies", proxies)
+    if "timeout" in kwargs:
+        kwargs["timeout"] = _normalize_timeout(kwargs["timeout"])
+    kwargs.setdefault("impersonate", "chrome120")
+    with curl_requests.Session(**kwargs) as client:
         yield client

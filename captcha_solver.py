@@ -200,6 +200,7 @@ class CaptchaSolver:
         rqdata = captcha_info.get("rqdata")
         if rqdata:
             task["data"] = rqdata
+            task["rqdata"] = rqdata
         return self._capsolver_solve(api_key, task)
 
     def _anticaptcha_hcaptcha(self, api_key: str, captcha_info: dict) -> Tuple[bool, str]:
@@ -212,6 +213,7 @@ class CaptchaSolver:
         if rqdata:
             task["isEnterprise"] = True
             task["enterprisePayload"] = {"rqdata": rqdata}
+            task["rqdata"] = rqdata
         return self._anticaptcha_solve(api_key, task)
 
     def _anticaptcha_arkose(self, api_key: str, captcha_info: dict) -> Tuple[bool, str]:
@@ -223,6 +225,7 @@ class CaptchaSolver:
         rqdata = captcha_info.get("rqdata")
         if rqdata:
             task["data"] = rqdata
+            task["rqdata"] = rqdata
         return self._anticaptcha_solve(api_key, task)
 
     def _capsolver_solve(self, api_key: str, task: dict) -> Tuple[bool, str]:
@@ -326,6 +329,7 @@ class CaptchaSolver:
         rqdata = captcha_info.get("rqdata")
         if rqdata:
             params["data"] = rqdata
+            params["rqdata"] = rqdata
         return self._twocaptcha_solve(params)
 
     def _twocaptcha_arkose(self, api_key: str, captcha_info: dict) -> Tuple[bool, str]:
@@ -339,6 +343,7 @@ class CaptchaSolver:
         rqdata = captcha_info.get("rqdata")
         if rqdata:
             params["data[blob]"] = rqdata
+            params["rqdata"] = rqdata
         surl = captcha_info.get("surl") or captcha_info.get("api_server")
         if surl:
             params["surl"] = surl
@@ -362,6 +367,9 @@ class CaptchaSolver:
             "pageurl": captcha_info["url"],
             "json": 1,
         }
+        rqdata = captcha_info.get("rqdata")
+        if rqdata:
+            params["rqdata"] = rqdata
         if is_v3:
             params["version"] = "v3"
             if min_score is None:
@@ -396,6 +404,9 @@ class CaptchaSolver:
             "pageurl": captcha_info["url"],
             "json": 1,
         }
+        rqdata = captcha_info.get("rqdata")
+        if rqdata:
+            params["rqdata"] = rqdata
         action = self._get_field(captcha_info, "action", "pageAction", "page_action")
         if action:
             params["action"] = action
@@ -434,7 +445,14 @@ class CaptchaSolver:
             task["pageAction"] = action
         data_s = self._get_field(captcha_info, "data_s", "data-s", "recaptchaDataSValue", "s")
         if data_s:
-            task["enterprisePayload"] = {"s": data_s}
+            payload = task.get("enterprisePayload") or {}
+            payload["s"] = data_s
+            task["enterprisePayload"] = payload
+        rqdata = captcha_info.get("rqdata")
+        if rqdata:
+            payload = task.get("enterprisePayload") or {}
+            payload["rqdata"] = rqdata
+            task["enterprisePayload"] = payload
         api_domain = self._get_field(captcha_info, "apiDomain", "api_domain", "domain")
         if api_domain:
             task["apiDomain"] = api_domain
@@ -447,6 +465,9 @@ class CaptchaSolver:
             "websiteKey": captcha_info["sitekey"],
         }
         metadata = {}
+        rqdata = captcha_info.get("rqdata")
+        if rqdata:
+            metadata["rqdata"] = rqdata
         action = self._get_field(captcha_info, "action", "pageAction", "page_action")
         if action:
             metadata["action"] = action
@@ -496,6 +517,11 @@ class CaptchaSolver:
             api_domain = self._get_field(captcha_info, "apiDomain", "api_domain", "domain")
             if api_domain:
                 task["apiDomain"] = api_domain
+        rqdata = captcha_info.get("rqdata")
+        if rqdata:
+            payload = task.get("enterprisePayload") or {}
+            payload["rqdata"] = rqdata
+            task["enterprisePayload"] = payload
         return self._anticaptcha_solve(api_key, task)
 
     def _anticaptcha_turnstile(self, api_key: str, captcha_info: dict) -> Tuple[bool, str]:
@@ -504,6 +530,9 @@ class CaptchaSolver:
             "websiteURL": captcha_info["url"],
             "websiteKey": captcha_info["sitekey"],
         }
+        rqdata = captcha_info.get("rqdata")
+        if rqdata:
+            task["rqdata"] = rqdata
         action = self._get_field(captcha_info, "action", "pageAction", "page_action")
         if action:
             task["action"] = action

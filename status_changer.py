@@ -2,6 +2,7 @@
 import time
 import random
 from proxy_utils import httpx_client
+from super_properties import set_super_properties_header
 
 class StatusChanger:
     def __init__(self, db_manager, log_callback, metrics=None):
@@ -92,6 +93,7 @@ class StatusChanger:
             "Authorization": token,
             "Content-Type": "application/json"
         }
+        set_super_properties_header(headers, self.db)
         
         # Discord payload - sets visual and custom status.
         data = {

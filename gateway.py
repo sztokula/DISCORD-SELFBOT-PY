@@ -1,0 +1,180 @@
+import asyncio
+import json
+import time
+from typing import Callable, Dict, Optional
+
+try:
+    import websockets
+except Exception as exc:  # pragma: no cover - optional dependency at runtime
+    websockets = None
+    _WEBSOCKETS_IMPORT_ERROR = exc
+else:
+    _WEBSOCKETS_IMPORT_ERROR = None
+
+GATEWAY_URL = "wss://gateway.discord.gg/?v=9&encoding=json"
+from proxy_utils import normalize_proxy
+
+
+class GatewayClient:
+    def __init__(
+        self,
+        token: str,
+        log: Optional[Callable[[str], None]] = None,
+        heartbeat_interval_seconds: float = 40.0,
+        properties: Optional[Dict[str, str]] = None,
+        proxy: Optional[str] = None,
+    ):
+        self.token = token
+        self.log = log
+        self.heartbeat_interval_seconds = heartbeat_interval_seconds
+        self.properties = properties or {
+            "os": "Windows",
+            "browser": "Chrome",
+            "device": "",
+        }
+        self.proxy = proxy
+        self._stop = asyncio.Event()
+        self._last_sequence = None
+
+    def stop(self):
+        self._stop.set()
+
+    async def run(self):
+        if websockets is None:
+            raise RuntimeError(
+                f"Missing dependency 'websockets': {_WEBSOCKETS_IMPORT_ERROR}"
+            )
+        while not self._stop.is_set():
+            try:
+                async with websockets.connect(
+                    GATEWAY_URL,
+                    ping_interval=None,
+                    ping_timeout=None,
+                    max_queue=32,
+                    proxy=self.proxy,
+                ) as ws:
+                    await self._handle_connection(ws)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._log(f"[Gateway] reconnecting after error: {exc}")
+                await asyncio.sleep(5)
+
+    async def _handle_connection(self, ws):
+        hello_payload = await ws.recv()
+        interval = self._extract_heartbeat_interval(hello_payload)
+        await ws.send(json.dumps(self._identify_payload()))
+        self._log("[Gateway] IDENTIFY sent")
+        await self._heartbeat_loop(ws, interval)
+
+    def _extract_heartbeat_interval(self, payload):
+        interval = self.heartbeat_interval_seconds
+        try:
+            data = json.loads(payload)
+            if data.get("op") == 10:
+                raw = data.get("d", {}).get("heartbeat_interval")
+                if isinstance(raw, (int, float)) and raw > 0:
+                    interval = max(1.0, raw / 1000.0)
+        except Exception:
+            pass
+        return interval
+
+    def _identify_payload(self):
+        return {
+            "op": 2,
+            "d": {
+                "token": self.token,
+                "properties": self.properties,
+                "presence": {
+                    "status": "online",
+                    "since": 0,
+                    "activities": [],
+                    "afk": False,
+                },
+                "compress": False,
+                "intents": 0,
+            },
+        }
+
+    async def _heartbeat_loop(self, ws, interval):
+        next_heartbeat = time.monotonic() + interval
+        while not self._stop.is_set():
+            timeout = max(0.0, next_heartbeat - time.monotonic())
+            try:
+                message = await asyncio.wait_for(ws.recv(), timeout=timeout)
+            except asyncio.TimeoutError:
+                await ws.send(json.dumps({"op": 1, "d": self._last_sequence}))
+                next_heartbeat = time.monotonic() + interval
+                continue
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                break
+
+            payload = self._safe_json(message)
+            if not payload:
+                continue
+            if "s" in payload:
+                self._last_sequence = payload["s"]
+            op = payload.get("op")
+            if op == 7:  # RECONNECT
+                break
+            if op == 9:  # INVALID_SESSION
+                break
+
+    def _safe_json(self, message):
+        try:
+            return json.loads(message)
+        except Exception:
+            return None
+
+    def _log(self, message):
+        if self.log:
+            self.log(message)
+
+
+class GatewayManager:
+    def __init__(self, db_manager, log: Optional[Callable[[str], None]] = None):
+        self.db = db_manager
+        self.log = log
+        self._clients = []
+        self._tasks = []
+        self._stop = asyncio.Event()
+
+    def stop(self):
+        for client in self._clients:
+            client.stop()
+        self._stop.set()
+
+    async def run(self):
+        accounts = self._load_active_accounts()
+        if not accounts:
+            self._log("[Gateway] No active tokens found.")
+            return
+        for token, proxy in accounts:
+            client = GatewayClient(token, log=self.log, proxy=proxy)
+            self._clients.append(client)
+            self._tasks.append(asyncio.create_task(client.run()))
+        await self._stop.wait()
+        for task in self._tasks:
+            task.cancel()
+
+    def _load_active_accounts(self):
+        accounts = self.db.get_active_accounts("discord")
+        results = []
+        for acc in accounts:
+            token = acc[2]
+            proxy = normalize_proxy(acc[3]) if len(acc) > 3 else ""
+            proxy = proxy or None
+            if token:
+                results.append((token, proxy))
+        return results
+
+    def _log(self, message):
+        if self.log:
+            self.log(message)
+
+
+async def run_gateway_for_active_tokens(db_manager, log=None):
+    manager = GatewayManager(db_manager, log=log)
+    await manager.run()

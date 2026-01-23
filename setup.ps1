@@ -9,7 +9,7 @@ if (-not (Test-Path ".venv")) {
 
 $python = Join-Path $root ".venv\\Scripts\\python.exe"
 & $python -m pip install --upgrade pip
-& $python -m pip install customtkinter httpx cryptography
+& $python -m pip install customtkinter httpx cryptography curl_cffi websockets
 
 if ($args -contains "-run") {
     & $python ".\\main.py"

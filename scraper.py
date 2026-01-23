@@ -1,6 +1,7 @@
 import httpx
 from proxy_utils import httpx_client
 import time
+from super_properties import set_super_properties_header
 
 class DiscordScraper:
     def __init__(self, db_manager, log_callback, metrics=None):
@@ -102,7 +103,11 @@ class DiscordScraper:
         added_any = False
         self.log(f"[Scraper] Starting scrape from channel {channel_id}...")
         
-        headers = {"Authorization": token}
+        headers = {
+            "Authorization": token,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        set_super_properties_header(headers, self.db)
         url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
         
         unique_ids = set()
@@ -170,7 +175,11 @@ class DiscordScraper:
         added_any = False
         self.log(f"[Scraper] Starting member list fetch for guild {guild_id}...")
 
-        headers = {"Authorization": token}
+        headers = {
+            "Authorization": token,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        set_super_properties_header(headers, self.db)
         url = f"https://discord.com/api/v9/guilds/{guild_id}/members"
 
         unique_ids = set()

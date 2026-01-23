@@ -19,7 +19,9 @@ from token_manager import TokenManager
 from updater import UpdateManager, UpdateError
 from metrics import HealthMetrics
 from profile_updater import ProfileUpdater
+from build_number_updater import BuildNumberUpdater
 from proxy_utils import normalize_proxy, httpx_client
+from super_properties import set_super_properties_header
 import httpx
 
 ctk.set_appearance_mode("Dark")
@@ -55,6 +57,12 @@ class MassDMApp(ctk.CTk):
         self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver, self.metrics) # Inicjalizacja
         self.token_manager = TokenManager(self.db, self.add_log, self.metrics)
         self.profile_updater = ProfileUpdater(self.db, self.add_log, self.metrics)
+        self.build_number_updater = BuildNumberUpdater(self.db, self.add_log)
+        self._build_number_thread = threading.Thread(
+            target=self.build_number_updater.run_forever,
+            daemon=True,
+        )
+        self._build_number_thread.start()
         self.log_entries = []
         self.error_entries = []
         self.max_log_entries = 2000
@@ -94,6 +102,7 @@ class MassDMApp(ctk.CTk):
         self.update_info = None
         self.manual_update_requested = False
         self.notification_var = ctk.StringVar(value="Notifications: --")
+        self.build_number_var = ctk.StringVar(value="Discord build: --")
 
         # --- SIDEBAR ---
         self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
@@ -404,10 +413,12 @@ class MassDMApp(ctk.CTk):
         if cached and (now - cached["ts"]) < self._proxy_check_ttl_seconds:
             return cached["ok"], cached["err"]
         try:
+            headers = {"User-Agent": "Mozilla/5.0"}
+            set_super_properties_header(headers, self.db)
             with httpx_client(
                 proxy,
                 timeout=httpx.Timeout(8.0),
-                headers={"User-Agent": "Mozilla/5.0"},
+                headers=headers,
             ) as client:
                 resp = client.get("https://discord.com/api/v9/experiments")
             if resp.status_code == 407:
@@ -1309,6 +1320,36 @@ class MassDMApp(ctk.CTk):
         if self.manual_update_requested:
             self.manual_update_requested = False
             messagebox.showerror("Update", message)
+
+    def refresh_build_number_display(self):
+        build = self.db.get_setting("client_build_number", "")
+        updated_at = self.db.get_setting("client_build_number_updated_at", "")
+        if build:
+            text = f"Discord build: {build}"
+            if updated_at:
+                text += f" (updated {updated_at})"
+        else:
+            text = "Discord build: --"
+        self.build_number_var.set(text)
+
+    def update_build_number_now(self):
+        self.add_log("[Build] Manual refresh requested.")
+        self.show_notification("Odświeżanie build number...", level="info")
+
+        def worker():
+            try:
+                updated = self.build_number_updater.run_once(force=True)
+            except Exception as exc:
+                self.add_log(f"[Build] Manual refresh failed: {exc}")
+                self.after(0, lambda: self.show_notification("Błąd odświeżania build number.", level="error"))
+                return
+            self.after(0, self.refresh_build_number_display)
+            if updated:
+                self.after(0, lambda: self.show_notification("Zaktualizowano build number.", level="success"))
+            else:
+                self.after(0, lambda: self.show_notification("Brak nowych danych build number.", level="info"))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def download_update(self):
         endpoint_entry = None
@@ -3303,6 +3344,21 @@ class MassDMApp(ctk.CTk):
         self.update_download_btn.grid(row=5, column=0, padx=10, pady=(0, 10), sticky="w")
         self.update_status_label = ctk.CTkLabel(self.version_frame, textvariable=self.update_status_var, text_color="#8a8a8a")
         self.update_status_label.grid(row=5, column=1, padx=10, pady=(0, 10), sticky="w")
+        self.build_number_label = ctk.CTkLabel(
+            self.version_frame,
+            textvariable=self.build_number_var,
+            text_color="#8a8a8a",
+            anchor="w",
+        )
+        self.build_number_label.grid(row=6, column=0, padx=10, pady=(0, 10), sticky="w")
+        self.build_refresh_btn = ctk.CTkButton(
+            self.version_frame,
+            text="Update Discord Build",
+            fg_color="#16a085",
+            command=self.update_build_number_now,
+        )
+        self.build_refresh_btn.grid(row=6, column=1, padx=10, pady=(0, 10), sticky="w")
+        self.refresh_build_number_display()
 
         self.target_frame = ctk.CTkFrame(parent)
         self.target_frame.pack(fill="x", pady=10)
