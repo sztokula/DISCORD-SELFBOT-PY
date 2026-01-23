@@ -1,6 +1,7 @@
 ﻿import httpx
 import time
 import random
+from proxy_utils import httpx_client
 
 class StatusChanger:
     def __init__(self, db_manager, log_callback, metrics=None):
@@ -98,10 +99,8 @@ class StatusChanger:
             "custom_status": {"text": custom_text}
         }
         
-        proxies = {"all://": proxy} if proxy else None
-        
         try:
-            with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 refreshed = False
                 for attempt in range(self.max_retries + 1):
                     start = time.monotonic()

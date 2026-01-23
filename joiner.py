@@ -1,4 +1,5 @@
 import httpx
+from proxy_utils import httpx_client
 import time
 import random
 
@@ -92,10 +93,8 @@ class DiscordJoiner:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
         
-        proxies = {"all://": proxy} if proxy else None
-        
         try:
-            with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 refreshed = False
                 for attempt in range(self.max_retries + 1):
                     start = time.monotonic()

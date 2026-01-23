@@ -1,4 +1,8 @@
 from urllib.parse import quote, urlparse
+import os
+import threading
+from contextlib import contextmanager
+import httpx
 
 VALID_PROXY_SCHEMES = {"http", "https", "socks5"}
 
@@ -112,3 +116,47 @@ def normalize_proxy(proxy, default_scheme="http"):
 
 def is_proxy_valid(proxy):
     return bool(normalize_proxy(proxy))
+
+
+def build_httpx_proxies(proxy, default_scheme="http"):
+    normalized = normalize_proxy(proxy, default_scheme=default_scheme)
+    if not normalized:
+        return None
+    return {
+        "http://": normalized,
+        "https://": normalized,
+    }
+
+
+_HTTPX_SUPPORTS_PROXIES = "proxies" in httpx.Client.__init__.__code__.co_varnames
+_PROXY_ENV_LOCK = threading.Lock()
+
+
+@contextmanager
+def httpx_client(proxy=None, **kwargs):
+    proxies = build_httpx_proxies(proxy)
+    if proxies and _HTTPX_SUPPORTS_PROXIES:
+        with httpx.Client(proxies=proxies, **kwargs) as client:
+            yield client
+        return
+    if proxies and not _HTTPX_SUPPORTS_PROXIES:
+        with _PROXY_ENV_LOCK:
+            old_http = os.environ.get("HTTP_PROXY")
+            old_https = os.environ.get("HTTPS_PROXY")
+            os.environ["HTTP_PROXY"] = proxies["http://"]
+            os.environ["HTTPS_PROXY"] = proxies["https://"]
+            try:
+                with httpx.Client(trust_env=True, **kwargs) as client:
+                    yield client
+            finally:
+                if old_http is None:
+                    os.environ.pop("HTTP_PROXY", None)
+                else:
+                    os.environ["HTTP_PROXY"] = old_http
+                if old_https is None:
+                    os.environ.pop("HTTPS_PROXY", None)
+                else:
+                    os.environ["HTTPS_PROXY"] = old_https
+        return
+    with httpx.Client(**kwargs) as client:
+        yield client

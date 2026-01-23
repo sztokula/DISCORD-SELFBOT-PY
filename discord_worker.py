@@ -4,6 +4,7 @@ import random
 import re
 from collections import deque
 from datetime import datetime, timedelta
+from proxy_utils import httpx_client
 
 class DiscordWorker:
     def __init__(self, db_manager, log_callback, metrics=None, captcha_solver=None):
@@ -286,9 +287,7 @@ class DiscordWorker:
             "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
-        proxies = {"all://": proxy} if proxy else None
-        
-        with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+        with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
             try:
                 refreshed = False
                 # Optional: send friend request.

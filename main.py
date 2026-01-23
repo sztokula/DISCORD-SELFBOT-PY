@@ -19,7 +19,7 @@ from token_manager import TokenManager
 from updater import UpdateManager, UpdateError
 from metrics import HealthMetrics
 from profile_updater import ProfileUpdater
-from proxy_utils import normalize_proxy
+from proxy_utils import normalize_proxy, httpx_client
 import httpx
 
 ctk.set_appearance_mode("Dark")
@@ -404,8 +404,8 @@ class MassDMApp(ctk.CTk):
         if cached and (now - cached["ts"]) < self._proxy_check_ttl_seconds:
             return cached["ok"], cached["err"]
         try:
-            with httpx.Client(
-                proxies={"all://": proxy},
+            with httpx_client(
+                proxy,
                 timeout=httpx.Timeout(8.0),
                 headers={"User-Agent": "Mozilla/5.0"},
             ) as client:

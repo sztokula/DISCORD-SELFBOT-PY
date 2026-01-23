@@ -2,7 +2,7 @@ import time
 
 import httpx
 
-from proxy_utils import normalize_proxy
+from proxy_utils import normalize_proxy, httpx_client
 
 class TokenManager:
     def __init__(self, db_manager, log_callback, metrics=None):
@@ -36,8 +36,8 @@ class TokenManager:
         if cached and (now - cached["ts"]) < self._proxy_check_ttl_seconds:
             return cached["ok"], cached["err"]
         try:
-            with httpx.Client(
-                proxies={"all://": proxy},
+            with httpx_client(
+                proxy,
                 timeout=httpx.Timeout(8.0),
                 headers={"User-Agent": "Mozilla/5.0"},
             ) as client:
@@ -60,9 +60,8 @@ class TokenManager:
                 return "retry", "Invalid proxy format."
         url = "https://discord.com/api/v9/users/@me"
         headers = {"Authorization": token}
-        proxies = {"all://": proxy} if proxy else None
         try:
-            with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 start = time.monotonic()
                 response = client.get(url)
         except Exception as exc:

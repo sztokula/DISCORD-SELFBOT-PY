@@ -1,4 +1,5 @@
 import httpx
+from proxy_utils import httpx_client
 import time
 
 class DiscordScraper:
@@ -102,7 +103,6 @@ class DiscordScraper:
         self.log(f"[Scraper] Starting scrape from channel {channel_id}...")
         
         headers = {"Authorization": token}
-        proxies = {"all://": proxy} if proxy else None
         url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
         
         unique_ids = set()
@@ -110,7 +110,7 @@ class DiscordScraper:
         rate_limit_attempt = 0
         
         try:
-            with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 self_id = self._fetch_self_id(client)
                 while len(unique_ids) < limit and self.is_scraping:
                     params = {"limit": 100}
@@ -171,7 +171,6 @@ class DiscordScraper:
         self.log(f"[Scraper] Starting member list fetch for guild {guild_id}...")
 
         headers = {"Authorization": token}
-        proxies = {"all://": proxy} if proxy else None
         url = f"https://discord.com/api/v9/guilds/{guild_id}/members"
 
         unique_ids = set()
@@ -179,7 +178,7 @@ class DiscordScraper:
         rate_limit_attempt = 0
 
         try:
-            with httpx.Client(proxies=proxies, headers=headers, timeout=httpx.Timeout(10.0)) as client:
+            with httpx_client(proxy, headers=headers, timeout=httpx.Timeout(10.0)) as client:
                 self_id = self._fetch_self_id(client)
                 while len(unique_ids) < limit and self.is_scraping:
                     remaining = max(1, limit - len(unique_ids))
