@@ -1,5 +1,6 @@
 import httpx
 import time
+from proxy_utils import httpx_client
 
 
 DEFAULT_MODEL = "gpt-4o-mini"
@@ -64,12 +65,12 @@ class OpenAIResponder:
         last_error = None
         for attempt in range(max_retries):
             try:
-                response = httpx.post(
-                    "https://api.openai.com/v1/responses",
-                    headers=headers,
-                    json=payload,
-                    timeout=timeout,
-                )
+                with httpx_client(timeout=timeout) as client:
+                    response = client.post(
+                        "https://api.openai.com/v1/responses",
+                        headers=headers,
+                        json=payload,
+                    )
             except Exception as exc:
                 last_error = exc
                 self._log(f"[Debug] OpenAI request exception (attempt {attempt + 1}/{max_retries}): {exc}")

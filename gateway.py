@@ -7,16 +7,9 @@ import random
 import sys
 from typing import Callable, Dict, Optional
 
-try:
-    import websockets
-except Exception as exc:  # pragma: no cover - optional dependency at runtime
-    websockets = None
-    _WEBSOCKETS_IMPORT_ERROR = exc
-else:
-    _WEBSOCKETS_IMPORT_ERROR = None
-
 GATEWAY_URL = "wss://gateway.discord.gg/?v=9&encoding=json"
-from proxy_utils import normalize_proxy
+from proxy_utils import normalize_proxy, ws_connect
+from super_properties import build_gateway_properties, get_token_user_agent
 from database import DatabaseManager
 
 
@@ -32,6 +25,7 @@ class GatewayClient:
         on_connect: Optional[Callable[[str], None]] = None,
         on_disconnect: Optional[Callable[[str], None]] = None,
         on_event: Optional[Callable[[str, Dict], None]] = None,
+        user_agent: Optional[str] = None,
     ):
         self.token = token
         self.log = log
@@ -50,24 +44,20 @@ class GatewayClient:
         self._last_sequence = None
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread = None
+        self.user_agent = user_agent
 
     def stop(self):
         self._stop.set()
 
     async def run(self):
-        if websockets is None:
-            raise RuntimeError(
-                f"Missing dependency 'websockets': {_WEBSOCKETS_IMPORT_ERROR}"
-            )
         reconnects = 0
         while not self._stop.is_set():
             try:
-                async with websockets.connect(
+                async with ws_connect(
                     GATEWAY_URL,
-                    ping_interval=None,
-                    ping_timeout=None,
-                    max_queue=32,
                     proxy=self.proxy,
+                    headers={"User-Agent": self.user_agent},
+                    timeout=30.0,
                 ) as ws:
                     reconnects = 0
                     await self._handle_connection(ws)
@@ -86,7 +76,7 @@ class GatewayClient:
                 self.on_connect(self.token)
             except Exception:
                 pass
-        hello_payload = await ws.recv()
+        hello_payload = self._normalize_ws_message(await ws.recv())
         interval = self._extract_heartbeat_interval(hello_payload)
         await ws.send(json.dumps(self._identify_payload()))
         self._log("[Gateway] IDENTIFY sent")
@@ -138,7 +128,7 @@ class GatewayClient:
     async def _recv_loop(self, ws):
         while not self._stop.is_set():
             try:
-                message = await ws.recv()
+                message = self._normalize_ws_message(await ws.recv())
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -217,10 +207,22 @@ class GatewayClient:
             return
 
     def _safe_json(self, message):
+        if message is None:
+            return None
         try:
             return json.loads(message)
         except Exception:
             return None
+
+    def _normalize_ws_message(self, message):
+        if isinstance(message, tuple) and len(message) == 2:
+            message = message[0]
+        if isinstance(message, (bytes, bytearray, memoryview)):
+            try:
+                message = bytes(message).decode("utf-8", errors="ignore")
+            except Exception:
+                return None
+        return message
 
     def _log(self, message):
         if self.log:
@@ -244,6 +246,9 @@ class GatewayManager:
         self._stop = asyncio.Event()
         self._active_tokens = set()
         self._active_lock = threading.Lock()
+        self._last_connected = {}
+        self._last_disconnected = {}
+        self._last_reconnected = {}
 
     def stop(self):
         for client in self._clients:
@@ -257,10 +262,14 @@ class GatewayManager:
             return
         self._log(f"[Info] Gateway starting for {len(accounts)} token(s).")
         for token, proxy in accounts:
+            user_agent = get_token_user_agent(self.db, token, proxy=proxy)
+            properties = build_gateway_properties(self.db, token=token, proxy=proxy, user_agent=user_agent)
             client = GatewayClient(
                 token,
                 log=self.log,
                 proxy=proxy,
+                properties=properties,
+                user_agent=user_agent,
                 on_connect=self._mark_connected,
                 on_disconnect=self._mark_disconnected,
                 on_event=self.on_event,
@@ -338,8 +347,13 @@ class GatewayManager:
     def _mark_connected(self, token):
         if not token:
             return
+        now = time.monotonic()
         with self._active_lock:
             self._active_tokens.add(token)
+            last_disc = self._last_disconnected.get(token)
+            if last_disc is not None and (now - last_disc) < 600:
+                self._last_reconnected[token] = now
+            self._last_connected[token] = now
         if self.shared_status is not None:
             try:
                 self.shared_status[token] = 1
@@ -351,9 +365,11 @@ class GatewayManager:
     def _mark_disconnected(self, token):
         if not token:
             return
+        now = time.monotonic()
         with self._active_lock:
             if token in self._active_tokens:
                 self._active_tokens.remove(token)
+            self._last_disconnected[token] = now
         if self.shared_status is not None:
             try:
                 self.shared_status.pop(token, None)
@@ -367,6 +383,19 @@ class GatewayManager:
             return False
         with self._active_lock:
             return token in self._active_tokens
+
+    def was_recently_reconnected(self, token, within_seconds=120):
+        if not token:
+            return False
+        try:
+            window = float(within_seconds)
+        except (TypeError, ValueError):
+            window = 120.0
+        with self._active_lock:
+            ts = self._last_reconnected.get(token)
+        if ts is None:
+            return False
+        return (time.monotonic() - ts) <= max(0.0, window)
 
 
 async def run_gateway_for_active_tokens(db_manager, log=None):

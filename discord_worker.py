@@ -6,7 +6,7 @@ from collections import deque
 from datetime import datetime, timedelta
 from proxy_utils import httpx_client
 from super_properties import set_super_properties_header
-from delay_utils import gaussian_delay
+from delay_utils import gaussian_delay, DelayController
 from client_identity import USER_AGENT
 
 class DiscordWorker:
@@ -17,6 +17,7 @@ class DiscordWorker:
         self.captcha_solver = captcha_solver
         self.telemetry = telemetry
         self.gateway_manager = gateway_manager
+        self.delay_controller = DelayController()
         self.is_running = False
         self.max_retries = 3
         self.backoff_factor = 1.5
@@ -147,7 +148,7 @@ class DiscordWorker:
         self._recent_templates.append(chosen)
         return chosen
 
-    def send_friend_request(self, client, user_id):
+    def send_friend_request(self, client, user_id, proxy=None):
         """Optional helper that sends a friend request."""
         url = f"https://discord.com/api/v9/users/{user_id}/relationships"
         for attempt in range(self.max_retries + 1):
@@ -166,8 +167,8 @@ class DiscordWorker:
                 self._wait_for_rate_limit(resp, attempt)
                 continue
             if resp.status_code in {400, 403}:
-                    if resp.status_code == 403:
-                        self._clear_token_cookies(client.headers.get("Authorization"))
+                if resp.status_code == 403:
+                    self._clear_token_cookies(client.headers.get("Authorization"))
                 captcha_payload, err, user_agent = self._solve_captcha_payload(resp)
                 if not captcha_payload:
                     self.log(f"[Captcha] Friend request blocked for {user_id}: {err}")
@@ -447,7 +448,7 @@ class DiscordWorker:
                 refreshed = False
                 # Optional: send friend request.
                 if add_friend:
-                    self.send_friend_request(client, user_id)
+                    self.send_friend_request(client, user_id, proxy=proxy)
                     if friend_delay_max > 0:
                         delay = gaussian_delay(friend_delay_min, friend_delay_max)
                         if delay > 0:
@@ -599,6 +600,8 @@ class DiscordWorker:
                             continue
                         return False, f"Captcha error: {retry_resp.status_code}"
                     return False, f"Code: {msg_resp.status_code}"
+            except Exception as exc:
+                return False, str(exc)
 
         return False, "Rate Limit (message)"
 
@@ -806,13 +809,31 @@ class DiscordWorker:
                     self.db.record_last_dm(acc_id, u_id)
                     self.log(f"[Info] DM sent to {u_id}")
                 else:
-                if self._is_captcha_error(msg):
-                    self._schedule_captcha_retry(t_id, u_id, msg)
-                else:
-                    self.db.update_target_status(t_id, "Failed", msg)
-                    self.log(f"[Error] DM send failed for {u_id}: {msg}")
+                    if self._is_captcha_error(msg):
+                        self._schedule_captcha_retry(t_id, u_id, msg)
+                    else:
+                        self.db.update_target_status(t_id, "Failed", msg)
+                        self.log(f"[Error] DM send failed for {u_id}: {msg}")
 
-                self._sleep_with_stop(gaussian_delay(delay_min, delay_max))
+                age_hours = self.db.get_account_age_hours(acc_id)
+                recently_reconnected = False
+                if self.gateway_manager and hasattr(self.gateway_manager, "was_recently_reconnected"):
+                    try:
+                        recently_reconnected = self.gateway_manager.was_recently_reconnected(token, within_seconds=180)
+                    except Exception:
+                        recently_reconnected = False
+                did_send = bool(dry_run or success)
+                sent_for_delay = sent_today + (1 if did_send else 0)
+                wait_seconds = self.delay_controller.next_delay(
+                    account_id=acc_id,
+                    base_min=delay_min,
+                    base_max=delay_max,
+                    account_age_hours=age_hours,
+                    sent_today=sent_for_delay,
+                    did_send=did_send,
+                    recently_reconnected=recently_reconnected,
+                )
+                self._sleep_with_stop(wait_seconds)
 
             if self.is_running and not did_send_attempt:
                 self.log("[Mission] All accounts reached the daily limit. Sleeping before next attempt.")

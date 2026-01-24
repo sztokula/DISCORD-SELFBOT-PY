@@ -199,6 +199,32 @@ class DatabaseManager:
                     updated_at TIMESTAMP
                 )
             ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS token_fingerprints (
+                    token_hash TEXT PRIMARY KEY,
+                    fingerprint TEXT,
+                    updated_at TIMESTAMP
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS token_health (
+                    token_hash TEXT PRIMARY KEY,
+                    status TEXT,
+                    score INTEGER,
+                    cooldown_until TIMESTAMP,
+                    last_event_at TIMESTAMP
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS token_violations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token_hash TEXT,
+                    kind TEXT,
+                    severity INTEGER,
+                    details TEXT,
+                    created_at TIMESTAMP
+                )
+            ''')
             conn.commit()
             conn.close()
         self._run_write(_init)
@@ -689,6 +715,9 @@ class DatabaseManager:
             cursor.execute("DELETE FROM last_dm WHERE account_id = ?", (account_id,))
             if token_hash:
                 cursor.execute("DELETE FROM token_cookies WHERE token_hash = ?", (token_hash,))
+                cursor.execute("DELETE FROM token_fingerprints WHERE token_hash = ?", (token_hash,))
+                cursor.execute("DELETE FROM token_health WHERE token_hash = ?", (token_hash,))
+                cursor.execute("DELETE FROM token_violations WHERE token_hash = ?", (token_hash,))
             conn.commit()
             conn.close()
         self._run_write(_remove)
@@ -826,6 +855,53 @@ class DatabaseManager:
         if not token:
             return
         self.set_token_cookies(token, None)
+
+    def get_token_fingerprint(self, token):
+        token_hash = self._token_hash(token)
+        if not token_hash:
+            return None
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT fingerprint FROM token_fingerprints WHERE token_hash = ?", (token_hash,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row or not row[0]:
+            return None
+        try:
+            return json.loads(row[0])
+        except Exception:
+            return None
+
+    def set_token_fingerprint(self, token, fingerprint):
+        token_hash = self._token_hash(token)
+        if not token_hash:
+            return
+        if fingerprint is None:
+            def _clear():
+                conn = self.get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM token_fingerprints WHERE token_hash = ?", (token_hash,))
+                conn.commit()
+                conn.close()
+            self._run_write(_clear)
+            return
+        raw = json.dumps(fingerprint, separators=(",", ":"), ensure_ascii=True)
+        def _set():
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                '''
+                INSERT INTO token_fingerprints (token_hash, fingerprint, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(token_hash) DO UPDATE SET
+                    fingerprint = excluded.fingerprint,
+                    updated_at = excluded.updated_at
+                ''',
+                (token_hash, raw, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            )
+            conn.commit()
+            conn.close()
+        self._run_write(_set)
 
     def get_proxy_pool(self):
         raw = self.get_setting("proxy_pool", "")

@@ -2,6 +2,7 @@ import time
 from typing import Optional, Tuple
 
 import httpx
+from proxy_utils import httpx_client
 
 
 class CaptchaSolver:
@@ -21,6 +22,16 @@ class CaptchaSolver:
     def _normalize_provider(self, provider: str) -> str:
         normalized = (provider or "").strip().lower()
         return self.PROVIDER_ALIASES.get(normalized, provider)
+
+    def _post_json(self, url, *, timeout, **kwargs):
+        with httpx_client(timeout=timeout) as client:
+            response = client.post(url, **kwargs)
+            return response.json()
+
+    def _get_json(self, url, *, timeout, **kwargs):
+        with httpx_client(timeout=timeout) as client:
+            response = client.get(url, **kwargs)
+            return response.json()
 
     @staticmethod
     def _get_field(captcha_info: dict, *keys):
@@ -139,12 +150,11 @@ class CaptchaSolver:
 
     def _capsolver_balance(self, api_key: str) -> Tuple[bool, str]:
         try:
-            response = httpx.post(
+            data = self._post_json(
                 "https://api.capsolver.com/getBalance",
                 json={"clientKey": api_key},
                 timeout=httpx.Timeout(10.0),
             )
-            data = response.json()
             if data.get("errorId") == 0:
                 balance = data.get("balance", "0")
                 return True, f"Balance: {balance} USD"
@@ -154,12 +164,11 @@ class CaptchaSolver:
 
     def _twocaptcha_balance(self, api_key: str) -> Tuple[bool, str]:
         try:
-            response = httpx.get(
+            data = self._get_json(
                 "https://2captcha.com/res.php",
                 params={"key": api_key, "action": "getbalance", "json": 1},
                 timeout=httpx.Timeout(10.0),
             )
-            data = response.json()
             if data.get("status") == 1:
                 return True, f"Balance: {data.get('request')} USD"
             return False, data.get("request", "Unknown error")
@@ -168,12 +177,11 @@ class CaptchaSolver:
 
     def _anticaptcha_balance(self, api_key: str) -> Tuple[bool, str]:
         try:
-            response = httpx.post(
+            data = self._post_json(
                 "https://api.anti-captcha.com/getBalance",
                 json={"clientKey": api_key},
                 timeout=httpx.Timeout(10.0),
             )
-            data = response.json()
             if data.get("errorId") == 0:
                 return True, f"Balance: {data.get('balance', '0')} USD"
             return False, data.get("errorDescription", "Unknown error")
@@ -230,12 +238,11 @@ class CaptchaSolver:
 
     def _capsolver_solve(self, api_key: str, task: dict) -> Tuple[bool, str]:
         try:
-            create = httpx.post(
+            create_data = self._post_json(
                 "https://api.capsolver.com/createTask",
                 json={"clientKey": api_key, "task": task},
                 timeout=httpx.Timeout(15.0),
             )
-            create_data = create.json()
             if create_data.get("errorId") != 0:
                 return False, create_data.get("errorDescription", "Unknown error")
             task_id = create_data.get("taskId")
@@ -250,12 +257,11 @@ class CaptchaSolver:
         while time.monotonic() < deadline:
             time.sleep(3)
             try:
-                resp = httpx.post(
+                data = self._post_json(
                     "https://api.capsolver.com/getTaskResult",
                     json={"clientKey": api_key, "taskId": task_id},
                     timeout=httpx.Timeout(15.0),
                 )
-                data = resp.json()
             except Exception as exc:
                 return False, str(exc)
             if data.get("status") == "ready":
@@ -277,12 +283,11 @@ class CaptchaSolver:
 
     def _anticaptcha_solve(self, api_key: str, task: dict) -> Tuple[bool, str]:
         try:
-            create = httpx.post(
+            create_data = self._post_json(
                 "https://api.anti-captcha.com/createTask",
                 json={"clientKey": api_key, "task": task},
                 timeout=httpx.Timeout(15.0),
             )
-            create_data = create.json()
             if create_data.get("errorId") != 0:
                 return False, create_data.get("errorDescription", "Unknown error")
             task_id = create_data.get("taskId")
@@ -297,12 +302,11 @@ class CaptchaSolver:
         while time.monotonic() < deadline:
             time.sleep(3)
             try:
-                resp = httpx.post(
+                data = self._post_json(
                     "https://api.anti-captcha.com/getTaskResult",
                     json={"clientKey": api_key, "taskId": task_id},
                     timeout=httpx.Timeout(15.0),
                 )
-                data = resp.json()
             except Exception as exc:
                 return False, str(exc)
             if data.get("errorId") not in (None, 0):
@@ -546,12 +550,11 @@ class CaptchaSolver:
 
     def _twocaptcha_solve(self, params: dict) -> Tuple[bool, str]:
         try:
-            submit = httpx.get(
+            data = self._get_json(
                 "https://2captcha.com/in.php",
                 params=params,
                 timeout=httpx.Timeout(15.0),
             )
-            data = submit.json()
             if data.get("status") != 1:
                 return False, data.get("request", "Unknown error")
             request_id = data.get("request")
@@ -562,12 +565,11 @@ class CaptchaSolver:
         while time.monotonic() < deadline:
             time.sleep(5)
             try:
-                res = httpx.get(
+                res_data = self._get_json(
                     "https://2captcha.com/res.php",
                     params={"key": params["key"], "action": "get", "id": request_id, "json": 1},
                     timeout=httpx.Timeout(15.0),
                 )
-                res_data = res.json()
             except Exception as exc:
                 return False, str(exc)
             if res_data.get("status") == 1:

@@ -1,7 +1,7 @@
 from urllib.parse import quote, urlparse
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from curl_cffi import requests as curl_requests
-from client_identity import IMPERSONATE_PROFILE
+from client_identity import IMPERSONATE_PROFILE, JA3_FINGERPRINT, AKAMAI_FINGERPRINT
 
 try:
     import httpx as _httpx
@@ -131,6 +131,22 @@ def build_httpx_proxies(proxy, default_scheme="http"):
         "https://": normalized,
     }
 
+
+def _apply_tls_defaults(kwargs):
+    if kwargs.get("impersonate") and kwargs.get("impersonate") != IMPERSONATE_PROFILE:
+        kwargs["impersonate"] = IMPERSONATE_PROFILE
+    else:
+        kwargs.setdefault("impersonate", IMPERSONATE_PROFILE)
+    if JA3_FINGERPRINT is not None:
+        kwargs["ja3"] = JA3_FINGERPRINT
+    else:
+        kwargs.pop("ja3", None)
+    if AKAMAI_FINGERPRINT is not None:
+        kwargs["akamai"] = AKAMAI_FINGERPRINT
+    else:
+        kwargs.pop("akamai", None)
+    return kwargs
+
 def _normalize_timeout(timeout):
     if timeout is None:
         return None
@@ -228,10 +244,7 @@ def httpx_client(proxy=None, cookie_db=None, cookie_token=None, **kwargs):
         kwargs.setdefault("proxies", proxies)
     if "timeout" in kwargs:
         kwargs["timeout"] = _normalize_timeout(kwargs["timeout"])
-    if kwargs.get("impersonate") and kwargs.get("impersonate") != IMPERSONATE_PROFILE:
-        kwargs["impersonate"] = IMPERSONATE_PROFILE
-    else:
-        kwargs.setdefault("impersonate", IMPERSONATE_PROFILE)
+    kwargs = _apply_tls_defaults(kwargs)
     with curl_requests.Session(**kwargs) as client:
         if cookie_db and cookie_token:
             token_value = _resolve_cookie_token(cookie_token)
@@ -245,3 +258,23 @@ def httpx_client(proxy=None, cookie_db=None, cookie_token=None, **kwargs):
                 token_value = _resolve_cookie_token(cookie_token)
                 if token_value:
                     cookie_db.set_token_cookies(token_value, _dump_cookies_from_session(client))
+
+
+@asynccontextmanager
+async def ws_connect(url, *, proxy=None, headers=None, timeout=None, **kwargs):
+    kwargs = _apply_tls_defaults(kwargs)
+    async with curl_requests.AsyncSession() as session:
+        ws = await session.ws_connect(
+            url,
+            proxy=proxy,
+            headers=headers,
+            timeout=_normalize_timeout(timeout),
+            **kwargs,
+        )
+        try:
+            yield ws
+        finally:
+            try:
+                ws.close()
+            except Exception:
+                pass
