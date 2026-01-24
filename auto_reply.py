@@ -60,6 +60,7 @@ class AutoReplyService:
                 mapping[token] = {"account_id": acc_id, "proxy": proxy}
         self._token_meta = mapping
         self._token_meta_last_refresh = time.monotonic()
+        self._log(f"[Debug] Token metadata refreshed: {len(mapping)} account(s).")
 
     def _get_token_meta(self, token):
         now = time.monotonic()
@@ -148,6 +149,8 @@ class AutoReplyService:
         stale = [cid for cid, ts in self._replied_channels.items() if ts < cutoff]
         for cid in stale:
             self._replied_channels.pop(cid, None)
+        if stale:
+            self._log(f"[Debug] Pruned replied channels: removed {len(stale)}.")
         author_name = author.get("username") or author.get("global_name")
         try:
             self._queue.put_nowait(
@@ -192,3 +195,6 @@ class AutoReplyService:
             )
             if not ok:
                 self._log(f"[AI] Auto-reply failed ({context}): {info}")
+                self._log(f"[Error] Auto-reply send failed ({context}): {info}")
+            else:
+                self._log(f"[Info] Auto-reply sent ({context}).")

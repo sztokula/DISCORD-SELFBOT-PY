@@ -48,6 +48,7 @@ class OpenAIResponder:
         if author_name:
             system_prompt = f"{system_prompt}\n\nUser name: {author_name}"
         self._log(f"[Debug] OpenAI request: model={model}.")
+        self._log(f"[Debug] OpenAI input length: {len(user_message)}.")
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -95,10 +96,13 @@ class OpenAIResponder:
         else:
             if last_error:
                 self._log(f"[AI] OpenAI request failed: {last_error}")
+                self._log(f"[Error] OpenAI request failed after {max_retries} attempts: {last_error}")
             return None
 
         output_text = data.get("output_text")
         if isinstance(output_text, str) and output_text.strip():
+            self._log(f"[Debug] OpenAI response length: {len(output_text.strip())}.")
+            self._log(f"[Info] OpenAI reply generated ({len(output_text.strip())} chars).")
             return output_text.strip()
 
         chunks = []
@@ -115,5 +119,8 @@ class OpenAIResponder:
                     if text:
                         chunks.append(text)
         if chunks:
-            return "\n".join(chunks).strip()
+            joined = "\n".join(chunks).strip()
+            self._log(f"[Debug] OpenAI response length: {len(joined)}.")
+            self._log(f"[Info] OpenAI reply generated ({len(joined)} chars).")
+            return joined
         return None

@@ -394,6 +394,8 @@ class MassDMApp(ctk.CTk):
         normalized = normalize_proxy(proxy)
         if normalized and normalized != (proxy or ""):
             self.add_log("[Debug] Proxy normalized.")
+        if not normalized and proxy:
+            self.log_error("Proxy normalization failed.")
         return normalized
 
     def _get_assigned_proxy_set(self):
@@ -410,12 +412,18 @@ class MassDMApp(ctk.CTk):
 
     def _pop_proxy_from_pool(self, exclude=None):
         proxy = self.db.pop_proxy_from_pool(exclude)
-        self.add_log(f"[Debug] Popped proxy from pool: {'found' if proxy else 'none'}.")
+        self.add_log(f"[Info] Popped proxy from pool: {'found' if proxy else 'none'}.")
         return proxy
 
     def _add_proxy_pool(self, proxies):
         self.add_log(f"[Debug] Adding {len(proxies)} proxy/proxies to pool.")
         self.db.add_proxy_pool(proxies)
+        try:
+            pool_size = len(self.db.get_proxy_pool())
+        except Exception:
+            pool_size = None
+        if pool_size is not None:
+            self.add_log(f"[Info] Proxy pool size: {pool_size}.")
 
     def _replace_proxy_from_pool(self, acc_id, assigned_set, context_label):
         while True:
@@ -460,7 +468,7 @@ class MassDMApp(ctk.CTk):
         with self._proxy_check_lock:
             self._proxy_check_cache[proxy] = {"ok": ok, "err": err, "ts": now}
         if ok:
-            self.add_log("[Debug] Proxy check OK.")
+            self.add_log("[Info] Proxy check OK.")
         else:
             self.add_log(f"[Debug] Proxy check failed: {err}.")
         return ok, err
@@ -484,9 +492,11 @@ class MassDMApp(ctk.CTk):
                     assigned_set,
                     "restore",
                 )
-                if replacement:
-                    self.db.update_account_status(acc_id, "Active")
-                    restored += 1
+                if not replacement:
+                    self.log_error(f"[Proxy] Restore failed: no proxy available for account {acc_id}.")
+            if replacement:
+                self.db.update_account_status(acc_id, "Active")
+                restored += 1
                 continue
             normalized = self._normalize_proxy(proxy)
             if not normalized:
@@ -611,7 +621,7 @@ class MassDMApp(ctk.CTk):
             if normalized != proxy:
                 self.db.set_setting("scrape_proxy", normalized)
                 self.add_log("[Debug] Scraper proxy normalized and saved.")
-            self.add_log(f"[Debug] Scraper proxy OK (no requirement): {context_label}.")
+            self.add_log(f"[Info] Scraper proxy OK (no requirement): {context_label}.")
             return normalized
         if not proxy:
             self.log_error(f"[Proxy] Scraper proxy required for {context_label}.")
@@ -627,7 +637,7 @@ class MassDMApp(ctk.CTk):
         if normalized != proxy:
             self.db.set_setting("scrape_proxy", normalized)
             self.add_log("[Debug] Scraper proxy normalized and saved.")
-        self.add_log(f"[Debug] Scraper proxy OK: {context_label}.")
+        self.add_log(f"[Info] Scraper proxy OK: {context_label}.")
         return normalized
 
     def _parse_delay_range(self, min_input, max_input, label, cast_type=int, min_value=0.0):
@@ -686,17 +696,20 @@ class MassDMApp(ctk.CTk):
         value = self._get_setting_number(key, None)
         if value is None:
             self.log_error(f"{label} is not set. Open settings.")
+            self.log_error(f"[Settings] Missing value for key: {key}.")
             self.add_log(f"[Debug] {label} settings missing.")
             return None
         value = self._convert_delay_value(value, assume_seconds=assume_seconds)
         if value is None:
             self.log_error(f"{label} has an invalid format.")
+            self.log_error(f"[Settings] Invalid format for key: {key}.")
             self.add_log(f"[Debug] {label} settings invalid format.")
             return None
         try:
             value = cast_type(value)
         except (TypeError, ValueError):
             self.log_error(f"{label} has an invalid format.")
+            self.log_error(f"[Settings] Invalid type for key: {key}.")
             self.add_log(f"[Debug] {label} settings parse failed.")
             return None
         if value < min_value:
@@ -719,6 +732,7 @@ class MassDMApp(ctk.CTk):
         max_val = self._get_setting_number(max_key, None)
         if min_val is None or max_val is None:
             self.log_error(f"{label} is not set. Open settings.")
+            self.log_error(f"[Settings] Missing values for keys: {min_key}, {max_key}.")
             self.add_log(f"[Debug] {label} settings missing min/max.")
             return None
         min_val = self._convert_delay_value(min_val, assume_seconds=assume_seconds)
@@ -879,6 +893,7 @@ class MassDMApp(ctk.CTk):
             f"range_value={range_value or ''}, accounts_limit={accounts_limit or ''}, "
             f"proxy_set={bool(scrape_proxy)}."
         )
+        self.add_log("[Info] Scrape settings saved.")
 
     def _load_scrape_settings(self):
         if not hasattr(self, "scrape_channel_input"):
@@ -923,6 +938,7 @@ class MassDMApp(ctk.CTk):
         self.db.set_setting("status_text", status_text or None)
         self.db.set_setting("status_type", status_type or None)
         self.add_log("[Status] Saved status settings.")
+        self.add_log(f"[Info] Status settings saved (type={status_type or 'none'}).")
 
     def save_profile_settings(self):
         if not hasattr(self, "profile_name_input"):
@@ -940,6 +956,9 @@ class MassDMApp(ctk.CTk):
             f"change_avatar={self.profile_change_avatar_var.get()}, "
             f"append_suffix={self.profile_append_suffix_var.get()}, "
             f"base_name_set={bool(base_name)}, avatar_path_set={bool(avatar_path)}."
+        )
+        self.add_log(
+            f"[Info] Profile settings saved (base_name_set={bool(base_name)}, avatar_path_set={bool(avatar_path)})."
         )
 
     def _load_profile_settings(self):
@@ -2188,6 +2207,8 @@ class MassDMApp(ctk.CTk):
             f"[Debug] Joiner settings saved: auto_verify={self.auto_verify_button_var.get() if hasattr(self, 'auto_verify_button_var') else False}, "
             f"verification_channel_set={bool(self.db.get_setting('verification_channel_id', ''))}."
         )
+        stored_channel = self.db.get_setting("verification_channel_id", "")
+        self.add_log(f"[Info] Joiner settings saved (verification_channel_id={stored_channel or 'none'}).")
 
     def _load_joiner_settings(self):
         if not hasattr(self, "onboarding_role_whitelist_input"):
@@ -2282,6 +2303,7 @@ class MassDMApp(ctk.CTk):
         if auto_verify_button:
             if not verification_channel_id:
                 self.log_warning("[Joiner] Verification channel ID missing; skipping auto-verify.")
+                self.log_error("[Joiner] Auto-verify enabled but verification channel is missing.")
                 auto_verify_button = False
             elif not self.is_valid_channel_id(verification_channel_id, self.verification_channel_input if hasattr(self, "verification_channel_input") else None):
                 self.log_warning("[Joiner] Invalid verification channel ID; skipping auto-verify.")
@@ -2320,6 +2342,12 @@ class MassDMApp(ctk.CTk):
         self._set_setting_bool("delay_units_hours", True)
         join_delay_min = int(round(self._hours_to_seconds(join_delay_min_h)))
         join_delay_max = int(round(self._hours_to_seconds(join_delay_max_h)))
+        self.add_log(
+            "[Debug] Joiner params: "
+            f"delay_min={join_delay_min}, delay_max={join_delay_max}, "
+            f"auto_accept_rules={auto_accept_rules}, auto_onboarding={auto_onboarding}, "
+            f"auto_verify={auto_verify_button}."
+        )
         accounts = self.db.get_active_accounts("discord")
         def _join_with_proxy_check():
             valid_accounts = self._ensure_account_proxies(accounts, "join")
@@ -2343,6 +2371,7 @@ class MassDMApp(ctk.CTk):
         thread = threading.Thread(target=_join_with_proxy_check)
         thread.daemon = True
         thread.start()
+        self.add_log("[Info] Joiner started.")
         return True
 
     def start_scraping(self, on_complete=None):
@@ -2374,6 +2403,7 @@ class MassDMApp(ctk.CTk):
         else:
             range_value = self.db.get_setting("scrape_range", "").strip()
         if not self.validate_token_format(token, token_entry):
+            self.log_error("[Scraper] Invalid or missing token.")
             return False
         if not self.is_valid_channel_id(channel_id, channel_entry):
             return False
@@ -2387,6 +2417,10 @@ class MassDMApp(ctk.CTk):
             scrape_proxy = self.scrape_proxy_input.get().strip()
         else:
             scrape_proxy = self.db.get_setting("scrape_proxy", "").strip()
+        self.add_log(
+            "[Debug] Scraper params: "
+            f"channel_id={channel_id}, limit={limit}, proxy_set={bool(scrape_proxy)}."
+        )
         def _scrape_with_proxy_check():
             normalized_proxy = self._ensure_scraper_proxy(scrape_proxy, "channel scrape")
             if normalized_proxy is None:
@@ -2405,9 +2439,11 @@ class MassDMApp(ctk.CTk):
         )
         thread.daemon = True
         thread.start()
+        self.add_log("[Info] Scraper started.")
         return True
 
     def start_guild_scraping(self, on_complete=None):
+        self.add_log("[UI] Guild scraper start requested.")
         if not self.module_vars["scraper"].get():
             self.log_error("Scraper module is disabled.")
             return False
@@ -2461,11 +2497,16 @@ class MassDMApp(ctk.CTk):
             scrape_proxy = self.scrape_proxy_input.get().strip()
         else:
             scrape_proxy = self.db.get_setting("scrape_proxy", "").strip()
+        self.add_log(
+            "[Debug] Guild scraper params: "
+            f"guild_id={guild_id}, limit={limit}, accounts_limit={accounts_limit}, proxy_set={bool(scrape_proxy)}."
+        )
         def _scrape_with_proxy_check():
             if accounts_limit > 0:
                 accounts = self.db.get_active_accounts("discord")
                 if not accounts:
                     self.log_error("No active accounts available for guild scraping.")
+                    self.log_error(f"[Scraper] Accounts limit enabled but no active accounts found (limit={accounts_limit}).")
                     if on_complete:
                         on_complete(False)
                     return
@@ -2516,6 +2557,7 @@ class MassDMApp(ctk.CTk):
         )
         thread.daemon = True
         thread.start()
+        self.add_log("[Info] Guild scraper started.")
         return True
 
     def start_status_update(self):
@@ -2675,6 +2717,13 @@ class MassDMApp(ctk.CTk):
         target_min_interval = int(round(self._hours_to_seconds(target_min_interval)))
         use_friend_req = self.friend_request_var.get()
         dry_run = self.dry_run_var.get()
+        self.add_log(
+            "[Debug] Mission params: "
+            f"dm_delay_min={dm_delay_min}, dm_delay_max={dm_delay_max}, "
+            f"friend_req={use_friend_req}, friend_delay_min={friend_delay_min}, friend_delay_max={friend_delay_max}, "
+            f"account_min_interval={account_min_interval}, target_min_interval={target_min_interval}, "
+            f"dry_run={dry_run}."
+        )
         if dry_run:
             self.add_log("[Mission] Dry-run enabled. Messages will not be sent.")
         accounts = self.db.get_active_accounts("discord")
@@ -2700,6 +2749,7 @@ class MassDMApp(ctk.CTk):
         )
         thread.daemon = True
         thread.start()
+        self.add_log("[Info] Mission started.")
 
     def stop_all(self):
         self.add_log("[UI] Stop all requested.")
@@ -2707,7 +2757,12 @@ class MassDMApp(ctk.CTk):
         self.scraper.stop()
         self.status_changer.stop()
         self.joiner.stop()
+        self.add_log("[Debug] Worker stop requested.")
+        self.add_log("[Debug] Scraper stop requested.")
+        self.add_log("[Debug] Status changer stop requested.")
+        self.add_log("[Debug] Joiner stop requested.")
         self.add_log("All processes stopped.")
+        self.add_log("[Info] All modules stopped.")
 
     def remove_account_by_id(self):
         self.add_log("[UI] Remove account requested.")
@@ -2853,6 +2908,10 @@ class MassDMApp(ctk.CTk):
         failed = counts.get("Failed", 0)
         dry_run = counts.get("Dry-Run", 0)
         retrying = counts.get("Retry", 0)
+        self.add_log(
+            f"[Debug] Targets overview counts: total={total}, pending={pending}, retry={retrying}, "
+            f"sent={sent}, failed={failed}, dry_run={dry_run}."
+        )
         self.target_summary_label.configure(
             text=(
                 f"Targets: {total} | Pending: {pending} | Retry: {retrying} | "
@@ -2957,6 +3016,7 @@ class MassDMApp(ctk.CTk):
         stored_geometry = self.db.get_setting("settings_window_geometry", "")
         if stored_geometry:
             self.settings_window.geometry(stored_geometry)
+            self.add_log(f"[Debug] Settings window geometry restored: {stored_geometry}.")
         else:
             self.settings_window.geometry("900x900")
         try:
@@ -3023,6 +3083,7 @@ class MassDMApp(ctk.CTk):
         stored_geometry = self.db.get_setting("log_window_geometry", "")
         if stored_geometry:
             self.log_window.geometry(stored_geometry)
+            self.add_log(f"[Debug] Logs window geometry restored: {stored_geometry}.")
         else:
             self.log_window.geometry("900x700")
         try:
@@ -3262,6 +3323,7 @@ class MassDMApp(ctk.CTk):
         self.db.set_setting("account_min_interval", str(account_interval))
         self.db.set_setting("target_min_interval", str(target_interval))
         self._set_setting_bool("delay_units_hours", True)
+        self.add_log("[Info] Delay settings saved.")
         self.add_log("[Settings] Saved delay settings.")
 
     def _build_settings_sections(self, parent):
@@ -3949,6 +4011,9 @@ class MassDMApp(ctk.CTk):
             f"once_per_conversation={self.auto_reply_once_var.get()}, "
             f"model={model or 'default'}, api_key_set={bool(api_key)}."
         )
+        self.add_log(f"[Info] AI settings saved (model={model or 'default'}).")
+        if self.auto_reply_var.get() and not api_key:
+            self.log_error("[AI] Auto-reply enabled but OpenAI API key is missing.")
 
     def _load_ai_settings(self):
         if not hasattr(self, "openai_key_input"):

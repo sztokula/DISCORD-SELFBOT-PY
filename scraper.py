@@ -91,13 +91,17 @@ class DiscordScraper:
         self._record_request(time.monotonic() - start, response)
         if response.status_code != 200:
             self.log(f"[Scraper] Failed to fetch @me: {response.status_code}")
+            self.log(f"[Error] Scraper @me failed: {response.status_code}.")
             return None
         try:
             data = response.json()
         except Exception:
             self.log("[Scraper] Failed to parse @me response.")
             return None
-        return data.get("id")
+        user_id = data.get("id")
+        if user_id:
+            self.log(f"[Debug] Scraper self ID: {user_id}.")
+        return user_id
 
     def scrape_history(self, token, channel_id, limit=1000, on_complete=None, proxy=None):
         """Fetch user IDs that have posted in a given channel."""
@@ -167,6 +171,8 @@ class DiscordScraper:
                 self.db.add_targets(list(unique_ids), "discord")
                 added_any = True
                 self.log(f"[Scraper] Success. Added {len(unique_ids)} new targets to the database.")
+                self.log(f"[Debug] Scrape history completed: total_unique={len(unique_ids)}.")
+                self.log(f"[Info] Scrape history completed: total_unique={len(unique_ids)}.")
                 if hasattr(self, "telemetry") and self.telemetry:
                     self.telemetry.send_science(
                         token,
@@ -175,6 +181,8 @@ class DiscordScraper:
                         properties={"channel_id": channel_id, "count": len(unique_ids)},
                         proxy=proxy,
                     )
+            else:
+                self.log("[Info] Scrape history completed: no new targets.")
             
         except Exception as e:
             self.log(f"[Scraper] Critical error: {str(e)}")
@@ -203,6 +211,7 @@ class DiscordScraper:
         unique_ids = set()
         last_member_id = None
         rate_limit_attempt = 0
+        page_count = 0
 
         try:
             with httpx_client(
@@ -222,6 +231,7 @@ class DiscordScraper:
                     start = time.monotonic()
                     response = client.get(url, params=params)
                     self._record_request(time.monotonic() - start, response)
+                    page_count += 1
 
                     if response.status_code == 429:
                         if rate_limit_attempt >= self.max_retries:
@@ -235,9 +245,11 @@ class DiscordScraper:
                         continue
                     if response.status_code == 403:
                         self._log_member_list_permission_error(response)
+                        self.log("[Error] Member list fetch forbidden (403).")
                         break
                     if response.status_code == 401:
                         self.log("[Scraper] Unauthorized token (HTTP 401).")
+                        self.log("[Error] Scraper unauthorized token (401).")
                         break
                     if response.status_code == 404:
                         self.log("[Scraper] Guild not found (HTTP 404).")
@@ -270,6 +282,8 @@ class DiscordScraper:
                 self.db.add_targets(list(unique_ids), "discord")
                 added_any = True
                 self.log(f"[Scraper] Success. Added {len(unique_ids)} new targets to the database.")
+                self.log(f"[Debug] Scrape guild completed: total_unique={len(unique_ids)}.")
+                self.log(f"[Info] Scrape guild completed: total_unique={len(unique_ids)}.")
                 if hasattr(self, "telemetry") and self.telemetry:
                     self.telemetry.send_science(
                         token,
@@ -278,6 +292,9 @@ class DiscordScraper:
                         properties={"guild_id": guild_id, "count": len(unique_ids)},
                         proxy=proxy,
                     )
+            self.log(f"[Debug] Scrape guild pages fetched: {page_count}.")
+            if not unique_ids:
+                self.log("[Info] Scrape guild completed: no new targets.")
         except Exception as e:
             self.log(f"[Scraper] Critical error: {str(e)}")
 

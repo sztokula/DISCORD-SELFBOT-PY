@@ -150,16 +150,16 @@ class TokenManager:
                 status, info = self._fetch_token_info(token, proxy)
 
             if status == "ok":
-                self.log(f"[OK] Account {acc_id}: {info}")
+                self.log(f"[Info] Account {acc_id}: {info}")
                 valid_count += 1
                 continue
 
             if status == "unauthorized":
-                self.log(f"[DEAD] Account {acc_id}: {info}. Deactivating in database.")
+                self.log(f"[Error] Account {acc_id}: {info}. Deactivating in database.")
                 self.db.update_account_status(acc_id, "Banned/Dead")
                 self.db.remove_account(acc_id)
                 continue
 
-            self.log(f"[WARN] Account {acc_id}: {info}. Skipping removal (retry later).")
+            self.log(f"[Warn] Account {acc_id}: {info}. Skipping removal (retry later).")
         
         self.log(f"[Checker] Done. Active: {valid_count}/{len(accounts)}")

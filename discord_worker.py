@@ -61,8 +61,10 @@ class DiscordWorker:
             connected = False
         if not connected:
             self.log("[Gateway] WebSocket down; stopping HTTP sending.")
+            self.log("[Error] Gateway disconnected; aborting send.")
             self.is_running = False
             return False
+        self.log("[Debug] Gateway connection OK.")
         return True
 
     def _clear_token_cookies(self, token):
@@ -157,6 +159,8 @@ class DiscordWorker:
                 self.log(f"[Friend Request] Exception for user {user_id}: {e}")
                 return False
             if resp.status_code in {200, 204}:
+                self.log(f"[Friend Request] Sent to {user_id}.")
+                self.log(f"[Info] Friend request sent: user_id={user_id}.")
                 return True
             if resp.status_code == 429:
                 self._wait_for_rate_limit(resp, attempt)
@@ -175,6 +179,7 @@ class DiscordWorker:
                 retry_resp = client.put(url, json=captcha_payload)
                 self._record_request(time.monotonic() - start, retry_resp)
                 if retry_resp.status_code in {200, 204}:
+                    self.log(f"[Info] Friend request sent (captcha): user_id={user_id}.")
                     return True
                 if retry_resp.status_code == 429:
                     self._wait_for_rate_limit(retry_resp, attempt)
@@ -360,7 +365,9 @@ class DiscordWorker:
         if not captcha_info:
             return None, "Captcha required.", None
         if not self.captcha_solver:
+            self.log("[Error] Captcha solver not configured.")
             return None, "Captcha solver not configured.", None
+        self.log(f"[Debug] Captcha solve requested: service={captcha_info.get('service')}.")
         solved, token_or_err = self.captcha_solver.solve_captcha(captcha_info)
         if not solved:
             return None, f"Captcha error: {token_or_err}", None
@@ -470,6 +477,7 @@ class DiscordWorker:
                     return False, f"Channel Error: {response.status_code}"
 
                 if not channel_id:
+                    self.log("[Error] DM channel creation failed after retries.")
                     return False, "Rate Limit (DM channel)"
 
                 msg_url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
@@ -519,6 +527,8 @@ class DiscordWorker:
                                 properties={"user_id": user_id, "channel_id": channel_id},
                                 proxy=proxy,
                             )
+                        self.log(f"[Debug] DM sent: user_id={user_id}, channel_id={channel_id}.")
+                        self.log(f"[Info] DM sent: user_id={user_id}.")
                         return True, "Success"
                     if msg_resp.status_code == 429:
                         self._wait_for_rate_limit(msg_resp, attempt)
@@ -557,6 +567,7 @@ class DiscordWorker:
                                     properties={"user_id": user_id, "channel_id": channel_id},
                                     proxy=proxy,
                                 )
+                            self.log(f"[Info] DM sent (captcha): user_id={user_id}.")
                             return True, "Success"
                         if retry_resp.status_code == 429:
                             self._wait_for_rate_limit(retry_resp, attempt)
@@ -575,6 +586,7 @@ class DiscordWorker:
         proxy=None,
     ):
         if not message_content:
+            self.log("[Error] Channel message is empty.")
             return False, "Empty message"
         if len(message_content) > 2000:
             message_content = message_content[:2000]
@@ -629,6 +641,8 @@ class DiscordWorker:
                             msg_id = None
                         if msg_id:
                             self._post_ack(client, channel_id=channel_id, message_id=msg_id)
+                        self.log(f"[Debug] Channel message sent: channel_id={channel_id}.")
+                        self.log(f"[Info] Channel message sent: channel_id={channel_id}.")
                         return True, "Success"
                     if msg_resp.status_code == 429:
                         self._wait_for_rate_limit(msg_resp, attempt)
@@ -659,9 +673,11 @@ class DiscordWorker:
                                 msg_id = retry_resp.json().get("id")
                             except Exception:
                                 msg_id = None
-                            if msg_id:
-                                self._post_ack(client, channel_id=channel_id, message_id=msg_id)
-                            return True, "Success (captcha)"
+                        if msg_id:
+                            self._post_ack(client, channel_id=channel_id, message_id=msg_id)
+                        self.log(f"[Debug] Channel message sent (captcha): channel_id={channel_id}.")
+                        self.log(f"[Info] Channel message sent (captcha): channel_id={channel_id}.")
+                        return True, "Success (captcha)"
                         if retry_resp.status_code == 429:
                             self._wait_for_rate_limit(retry_resp, attempt)
                             continue
@@ -765,13 +781,13 @@ class DiscordWorker:
                     self.db.update_target_status(t_id, "Sent")
                     self.db.increment_sent_counter(acc_id)
                     self.db.record_last_dm(acc_id, u_id)
-                    self.log(f"[OK] DM sent to {u_id}")
+                    self.log(f"[Info] DM sent to {u_id}")
                 else:
                 if self._is_captcha_error(msg):
                     self._schedule_captcha_retry(t_id, u_id, msg)
                 else:
                     self.db.update_target_status(t_id, "Failed", msg)
-                    self.log(f"[!] Error {u_id}: {msg}")
+                    self.log(f"[Error] DM send failed for {u_id}: {msg}")
 
                 self._sleep_with_stop(gaussian_delay(delay_min, delay_max))
 

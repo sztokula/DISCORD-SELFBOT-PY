@@ -131,6 +131,7 @@ class StatusChanger:
                     if response.status_code in (200, 204):
                         if response.status_code == 204:
                             self.log("[Status] Status updated (204 No Content).")
+                        self.log(f"[Info] Status updated for account {account_id}.")
                         if self.telemetry:
                             self.telemetry.send_science(
                                 token,

@@ -97,6 +97,7 @@ class DiscordJoiner:
         """invite_code: only the invite slug, e.g. 'cool-server' from discord.gg/cool-server"""
         # Strip invite code in case a full link is pasted.
         invite_code = invite_code.split("/")[-1]
+        self.log(f"[Debug] Join attempt: invite={invite_code}, proxy_set={bool(proxy)}.")
         
         url = f"https://discord.com/api/v9/invites/{invite_code}"
         user_agent = USER_AGENT
@@ -406,6 +407,7 @@ class DiscordJoiner:
             return False
         sample_count = min(max(1, int(channels_to_visit)), len(candidates))
         picked = random.sample(candidates, k=sample_count)
+        self.log(f"[Debug] Browsing guild {guild_id}: visiting {sample_count} channel(s).")
         for idx, channel_id in enumerate(picked):
             try:
                 start = time.monotonic()
@@ -504,6 +506,7 @@ class DiscordJoiner:
             }
         )
         self.log(f"[Captcha] Account {acc_id}: retry scheduled in {int(delay)}s ({invite_code}).")
+        self.log(f"[Debug] Captcha retry scheduled at t+{int(delay)}s for account {acc_id}.")
 
     def _extract_guild_id(self, response):
         try:
@@ -554,12 +557,14 @@ class DiscordJoiner:
             if resp.status_code == 429:
                 retry_after = self._get_retry_after(resp)
                 wait_time = retry_after * (self.backoff_factor ** attempt)
+                self.log(f"[Debug] Rate limit on {url}. Retry attempt {attempt + 1}.")
                 self._sleep_with_stop(wait_time)
                 continue
             if resp.status_code in {400, 403}:
                 captcha_payload, err, user_agent = self._solve_captcha_payload(resp)
                 if not captcha_payload:
                     self.log(f"[Captcha] Failed: {err}")
+                    self.log(f"[Error] Captcha payload unavailable: {err}")
                     return False
                 if user_agent:
                     client.headers["User-Agent"] = user_agent
@@ -574,6 +579,7 @@ class DiscordJoiner:
                 if retry_resp.status_code == 429:
                     retry_after = self._get_retry_after(retry_resp)
                     wait_time = retry_after * (self.backoff_factor ** attempt)
+                    self.log(f"[Debug] Post-captcha rate limit on {url}. Retry attempt {attempt + 1}.")
                     self._sleep_with_stop(wait_time)
                     continue
                 self.log(f"[Captcha] Post-captcha error: {retry_resp.status_code}")
@@ -605,6 +611,7 @@ class DiscordJoiner:
                 continue
             if resp.status_code in {401, 403, 404}:
                 self.log(f"[Joiner] Cannot read verification channel ({resp.status_code}).")
+                self.log(f"[Error] Verification channel read failed ({resp.status_code}).")
                 return None
             return None
         return None
@@ -678,6 +685,7 @@ class DiscordJoiner:
             application_id = author.get("id")
         if not (message_id and application_id):
             self.log("[Joiner] Verification message missing IDs.")
+            self.log("[Error] Verification message missing application_id or message_id.")
             return False
         ok = self._send_button_interaction(
             client,
@@ -689,6 +697,7 @@ class DiscordJoiner:
         )
         if ok:
             self.log("[Joiner] Verification button clicked.")
+            self.log(f"[Info] Verification button clicked (channel={channel_id}).")
         return ok
 
     def _build_rule_response(self, field):
@@ -741,6 +750,7 @@ class DiscordJoiner:
         )
         if ok:
             self.log(f"[Joiner] Accepted rules for guild {guild_id}.")
+            self.log(f"[Info] Rules accepted for guild {guild_id}.")
         return ok
 
     def _complete_onboarding(self, client, guild_id, role_whitelist=None):
@@ -802,6 +812,7 @@ class DiscordJoiner:
         )
         if ok:
             self.log(f"[Joiner] Completed onboarding for guild {guild_id}.")
+            self.log(f"[Info] Onboarding completed for guild {guild_id}.")
         return ok
 
     def _handle_post_join(

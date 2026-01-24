@@ -54,6 +54,7 @@ class GatewayClient:
             raise RuntimeError(
                 f"Missing dependency 'websockets': {_WEBSOCKETS_IMPORT_ERROR}"
             )
+        reconnects = 0
         while not self._stop.is_set():
             try:
                 async with websockets.connect(
@@ -63,11 +64,15 @@ class GatewayClient:
                     max_queue=32,
                     proxy=self.proxy,
                 ) as ws:
+                    reconnects = 0
                     await self._handle_connection(ws)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                reconnects += 1
+                self._log(f"[Gateway] reconnect attempt {reconnects} after error: {exc}")
                 self._log(f"[Gateway] reconnecting after error: {exc}")
+                self._log(f"[Error] Gateway connection failed: {exc}")
                 await asyncio.sleep(5)
 
     async def _handle_connection(self, ws):
@@ -203,6 +208,7 @@ class GatewayManager:
         if not accounts:
             self._log("[Gateway] No active tokens found.")
             return
+        self._log(f"[Info] Gateway starting for {len(accounts)} token(s).")
         for token, proxy in accounts:
             client = GatewayClient(
                 token,
@@ -238,6 +244,8 @@ class GatewayManager:
             return
         with self._active_lock:
             self._active_tokens.add(token)
+        suffix = str(token)[-6:]
+        self._log(f"[Info] Gateway connected (token=...{suffix}).")
 
     def _mark_disconnected(self, token):
         if not token:
@@ -245,6 +253,8 @@ class GatewayManager:
         with self._active_lock:
             if token in self._active_tokens:
                 self._active_tokens.remove(token)
+        suffix = str(token)[-6:]
+        self._log(f"[Warn] Gateway disconnected (token=...{suffix}).")
 
     def is_connected(self, token):
         if not token:

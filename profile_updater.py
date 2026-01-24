@@ -112,6 +112,7 @@ class ProfileUpdater:
                     self._record_request(time.monotonic() - start, response)
                     if response.status_code == 200:
                         self.log(f"[Profile] Account {acc_id}: profile updated.")
+                        self.log(f"[Info] Profile updated for account {acc_id}.")
                         if self.telemetry:
                             self.telemetry.send_science(
                                 token,
