@@ -391,7 +391,10 @@ class MassDMApp(ctk.CTk):
         return self._get_setting_bool("require_proxy", True)
 
     def _normalize_proxy(self, proxy):
-        return normalize_proxy(proxy)
+        normalized = normalize_proxy(proxy)
+        if normalized and normalized != (proxy or ""):
+            self.add_log("[Debug] Proxy normalized.")
+        return normalized
 
     def _get_assigned_proxy_set(self):
         assigned = set()
@@ -406,9 +409,12 @@ class MassDMApp(ctk.CTk):
         return assigned
 
     def _pop_proxy_from_pool(self, exclude=None):
-        return self.db.pop_proxy_from_pool(exclude)
+        proxy = self.db.pop_proxy_from_pool(exclude)
+        self.add_log(f"[Debug] Popped proxy from pool: {'found' if proxy else 'none'}.")
+        return proxy
 
     def _add_proxy_pool(self, proxies):
+        self.add_log(f"[Debug] Adding {len(proxies)} proxy/proxies to pool.")
         self.db.add_proxy_pool(proxies)
 
     def _replace_proxy_from_pool(self, acc_id, assigned_set, context_label):
@@ -434,6 +440,7 @@ class MassDMApp(ctk.CTk):
             cached = self._proxy_check_cache.get(proxy)
         now = datetime.now().timestamp()
         if cached and (now - cached["ts"]) < self._proxy_check_ttl_seconds:
+            self.add_log("[Debug] Proxy check cache hit.")
             return cached["ok"], cached["err"]
         try:
             headers = {"User-Agent": USER_AGENT}
@@ -452,6 +459,10 @@ class MassDMApp(ctk.CTk):
             ok, err = False, f"Proxy error: {exc}"
         with self._proxy_check_lock:
             self._proxy_check_cache[proxy] = {"ok": ok, "err": err, "ts": now}
+        if ok:
+            self.add_log("[Debug] Proxy check OK.")
+        else:
+            self.add_log(f"[Debug] Proxy check failed: {err}.")
         return ok, err
 
     def _is_proxy_format_valid(self, proxy):
@@ -599,6 +610,8 @@ class MassDMApp(ctk.CTk):
                 return None
             if normalized != proxy:
                 self.db.set_setting("scrape_proxy", normalized)
+                self.add_log("[Debug] Scraper proxy normalized and saved.")
+            self.add_log(f"[Debug] Scraper proxy OK (no requirement): {context_label}.")
             return normalized
         if not proxy:
             self.log_error(f"[Proxy] Scraper proxy required for {context_label}.")
@@ -613,6 +626,8 @@ class MassDMApp(ctk.CTk):
             return None
         if normalized != proxy:
             self.db.set_setting("scrape_proxy", normalized)
+            self.add_log("[Debug] Scraper proxy normalized and saved.")
+        self.add_log(f"[Debug] Scraper proxy OK: {context_label}.")
         return normalized
 
     def _parse_delay_range(self, min_input, max_input, label, cast_type=int, min_value=0.0):
@@ -858,6 +873,12 @@ class MassDMApp(ctk.CTk):
                 self.scrape_proxy_input.insert(0, scrape_proxy)
                 self._set_input_valid(self.scrape_proxy_input, True)
         self.db.set_setting("scrape_proxy", scrape_proxy or None)
+        self.add_log(
+            "[Debug] Scrape settings saved: "
+            f"token_set={bool(token)}, channel_id={bool(channel_id)}, guild_id={bool(guild_id)}, "
+            f"range_value={range_value or ''}, accounts_limit={accounts_limit or ''}, "
+            f"proxy_set={bool(scrape_proxy)}."
+        )
 
     def _load_scrape_settings(self):
         if not hasattr(self, "scrape_channel_input"):
@@ -914,6 +935,12 @@ class MassDMApp(ctk.CTk):
         self._set_setting_bool("profile_change_avatar", self.profile_change_avatar_var.get())
         self._set_setting_bool("profile_append_suffix", self.profile_append_suffix_var.get())
         self.add_log("[Profile] Saved profile settings.")
+        self.add_log(
+            f"[Debug] Profile settings: change_name={self.profile_change_name_var.get()}, "
+            f"change_avatar={self.profile_change_avatar_var.get()}, "
+            f"append_suffix={self.profile_append_suffix_var.get()}, "
+            f"base_name_set={bool(base_name)}, avatar_path_set={bool(avatar_path)}."
+        )
 
     def _load_profile_settings(self):
         if not hasattr(self, "profile_name_input"):
@@ -1385,13 +1412,16 @@ class MassDMApp(ctk.CTk):
                     "Update",
                     f"Update {latest} is available. Download and install now?",
                 )
+                self.add_log(f"[Debug] Manual update prompt result: confirmed={confirmed}.")
                 if confirmed:
                     self.download_update()
             else:
                 messagebox.showinfo("Update", "No updates available.")
+                self.add_log("[Debug] Manual update prompt: no updates available.")
 
     def _handle_update_error(self, message):
         self.show_notification(message, level="error")
+        self.add_log(f"[Debug] Update error: {message}")
         if self.manual_update_requested:
             self.manual_update_requested = False
             messagebox.showerror("Update", message)
@@ -1442,6 +1472,7 @@ class MassDMApp(ctk.CTk):
             self.log_error(err)
             self.show_notification(err, level="error")
             return
+        self.add_log(f"[Debug] Download update using endpoint: {endpoint}.")
         self.db.set_setting("version_endpoint", endpoint)
         self.add_log("[Updater] Downloading update...")
         self._set_update_button_state(False)
@@ -1454,12 +1485,14 @@ class MassDMApp(ctk.CTk):
         ).start()
 
     def _download_update_worker(self, endpoint):
+        self.add_log(f"[Debug] Download update worker started: endpoint={endpoint}.")
         try:
             with request.urlopen(endpoint, timeout=10) as response:
                 payload = response.read().decode("utf-8")
             data = json.loads(payload)
         except (URLError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             self.add_log(f"[Updater] Failed to download update: {exc}")
+            self.add_log("[Debug] Download update failed while fetching/parsing response.")
             self.after(0, lambda: self._set_update_status("Update: download error"))
             self.after(0, lambda: self._set_update_button_state(True))
             self.after(0, lambda: self.show_notification("Update download error.", level="error"))
@@ -1470,12 +1503,14 @@ class MassDMApp(ctk.CTk):
             updater.download_and_apply(data)
         except UpdateError as exc:
             self.add_log(f"[Updater] Update failed: {exc}")
+            self.add_log("[Debug] Download update failed during apply.")
             self.after(0, lambda: self._set_update_status("Update: validation error"))
             self.after(0, lambda: self._set_update_button_state(True))
             self.after(0, lambda: self.show_notification("Update failed.", level="error"))
             return
 
         self.add_log("[Updater] Update finished. Restart the app.")
+        self.add_log("[Debug] Download update completed successfully.")
         self.after(0, lambda: self._set_update_status("Update: installed"))
         self.after(0, lambda: self.show_notification("Update installed. Restart the app.", level="success"))
 
@@ -1972,6 +2007,7 @@ class MassDMApp(ctk.CTk):
         )
         if not file_path:
             return
+        self.add_log(f"[Debug] Tokens file selected: {file_path}.")
         tokens, invalid = self._parse_tokens_from_file(file_path)
         if not tokens:
             self.log_error("No valid tokens in file.")
@@ -2004,6 +2040,7 @@ class MassDMApp(ctk.CTk):
         )
         if not file_path:
             return
+        self.add_log(f"[Debug] Proxies file selected: {file_path}.")
         proxies, invalid = self._parse_proxies_from_file(file_path)
         if not proxies:
             self.log_error("No valid proxies in file.")
@@ -2028,6 +2065,7 @@ class MassDMApp(ctk.CTk):
         )
         if not file_path:
             return
+        self.add_log(f"[Debug] Token/proxy file selected: {file_path}.")
         pairs, invalid = self._parse_token_proxy_pairs_from_file(file_path)
         if not pairs:
             self.log_error("No valid token/proxy pairs in file.")
@@ -2146,6 +2184,10 @@ class MassDMApp(ctk.CTk):
             self.add_log(f"[Joiner] Saved {len(role_ids)} role IDs for onboarding.")
         else:
             self.db.set_setting("onboarding_role_whitelist", None)
+        self.add_log(
+            f"[Debug] Joiner settings saved: auto_verify={self.auto_verify_button_var.get() if hasattr(self, 'auto_verify_button_var') else False}, "
+            f"verification_channel_set={bool(self.db.get_setting('verification_channel_id', ''))}."
+        )
 
     def _load_joiner_settings(self):
         if not hasattr(self, "onboarding_role_whitelist_input"):
@@ -2718,6 +2760,7 @@ class MassDMApp(ctk.CTk):
                 self.acc_overview_box.tag_add(tag, start_index, end_index)
             else:
                 self.acc_overview_box.insert("end", line)
+        self.add_log(f"[Debug] Accounts overview refreshed: total={len(accounts)}.")
         self.refresh_workflow_status()
 
     def reset_account_counters(self):
@@ -3901,6 +3944,11 @@ class MassDMApp(ctk.CTk):
         self.db.set_setting("openai_model", model or None)
         self.db.set_setting("openai_system_prompt", prompt or None)
         self.add_log("[AI] Saved auto-reply settings.")
+        self.add_log(
+            f"[Debug] AI settings: enabled={self.auto_reply_var.get()}, "
+            f"once_per_conversation={self.auto_reply_once_var.get()}, "
+            f"model={model or 'default'}, api_key_set={bool(api_key)}."
+        )
 
     def _load_ai_settings(self):
         if not hasattr(self, "openai_key_input"):
