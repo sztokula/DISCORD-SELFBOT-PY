@@ -509,7 +509,9 @@ class MassDMApp(ctk.CTk):
         return restored
 
     def _ensure_account_proxies(self, accounts, context_label):
+        self.add_log(f"[Debug] Ensuring proxies for {len(accounts)} account(s) (context={context_label}).")
         if not self._is_proxy_required():
+            self.add_log("[Debug] Proxy requirement disabled; normalizing existing proxies only.")
             normalized_accounts = []
             for acc in accounts:
                 acc_id, _, _, proxy, *_rest = acc
@@ -583,9 +585,11 @@ class MassDMApp(ctk.CTk):
                 self.db.update_account_status(acc_id, "Unverified")
         if not valid_accounts:
             self.log_error(f"[Proxy] {context_label}: no accounts with working proxies.")
+        self.add_log(f"[Debug] {context_label}: valid accounts after proxy checks: {len(valid_accounts)}.")
         return valid_accounts
 
     def _ensure_scraper_proxy(self, proxy, context_label):
+        self.add_log(f"[Debug] Scraper proxy check: context={context_label}.")
         if not self._is_proxy_required():
             if not proxy:
                 return ""
@@ -619,25 +623,30 @@ class MassDMApp(ctk.CTk):
         except (TypeError, ValueError):
             self.log_error(f"{label} (min) must be a number.")
             self._set_input_valid(min_input, False)
+            self.add_log(f"[Debug] {label} min parse failed: {min_raw}.")
             return None
         try:
             max_val = cast_type(max_raw)
         except (TypeError, ValueError):
             self.log_error(f"{label} (max) must be a number.")
             self._set_input_valid(max_input, False)
+            self.add_log(f"[Debug] {label} max parse failed: {max_raw}.")
             return None
         if min_val < min_value or max_val < min_value:
             self.log_error(f"{label} must be >= {min_value}.")
             self._set_input_valid(min_input, False)
             self._set_input_valid(max_input, False)
+            self.add_log(f"[Debug] {label} below minimum: {min_val}, {max_val}.")
             return None
         if min_val > max_val:
             self.log_error(f"{label} min cannot be greater than max.")
             self._set_input_valid(min_input, False)
             self._set_input_valid(max_input, False)
+            self.add_log(f"[Debug] {label} invalid range: {min_val} > {max_val}.")
             return None
         self._set_input_valid(min_input, True)
         self._set_input_valid(max_input, True)
+        self.add_log(f"[Debug] {label} parsed: {min_val} to {max_val}.")
         return min_val, max_val
 
     def _parse_min_value(self, input_widget, label, cast_type=int, min_value=0.0):
@@ -647,31 +656,39 @@ class MassDMApp(ctk.CTk):
         except (TypeError, ValueError):
             self.log_error(f"{label} must be a number.")
             self._set_input_valid(input_widget, False)
+            self.add_log(f"[Debug] {label} parse failed: {raw}.")
             return None
         if value < min_value:
             self.log_error(f"{label} must be >= {min_value}.")
             self._set_input_valid(input_widget, False)
+            self.add_log(f"[Debug] {label} below minimum: {value}.")
             return None
         self._set_input_valid(input_widget, True)
+        self.add_log(f"[Debug] {label} parsed: {value}.")
         return value
 
     def _parse_min_value_from_settings(self, key, label, cast_type=int, min_value=0.0, assume_seconds=False):
         value = self._get_setting_number(key, None)
         if value is None:
             self.log_error(f"{label} is not set. Open settings.")
+            self.add_log(f"[Debug] {label} settings missing.")
             return None
         value = self._convert_delay_value(value, assume_seconds=assume_seconds)
         if value is None:
             self.log_error(f"{label} has an invalid format.")
+            self.add_log(f"[Debug] {label} settings invalid format.")
             return None
         try:
             value = cast_type(value)
         except (TypeError, ValueError):
             self.log_error(f"{label} has an invalid format.")
+            self.add_log(f"[Debug] {label} settings parse failed.")
             return None
         if value < min_value:
             self.log_error(f"{label} must be >= {min_value}.")
+            self.add_log(f"[Debug] {label} settings below minimum: {value}.")
             return None
+        self.add_log(f"[Debug] {label} settings parsed: {value}.")
         return value
 
     def _parse_delay_range_from_settings(
@@ -687,24 +704,30 @@ class MassDMApp(ctk.CTk):
         max_val = self._get_setting_number(max_key, None)
         if min_val is None or max_val is None:
             self.log_error(f"{label} is not set. Open settings.")
+            self.add_log(f"[Debug] {label} settings missing min/max.")
             return None
         min_val = self._convert_delay_value(min_val, assume_seconds=assume_seconds)
         max_val = self._convert_delay_value(max_val, assume_seconds=assume_seconds)
         if min_val is None or max_val is None:
             self.log_error(f"{label} has an invalid format.")
+            self.add_log(f"[Debug] {label} settings invalid format.")
             return None
         try:
             min_val = cast_type(min_val)
             max_val = cast_type(max_val)
         except (TypeError, ValueError):
             self.log_error(f"{label} has an invalid format.")
+            self.add_log(f"[Debug] {label} settings parse failed.")
             return None
         if min_val < min_value or max_val < min_value:
             self.log_error(f"{label} must be >= {min_value}.")
+            self.add_log(f"[Debug] {label} settings below minimum: {min_val}, {max_val}.")
             return None
         if min_val > max_val:
             self.log_error(f"{label} min cannot be greater than max.")
+            self.add_log(f"[Debug] {label} settings invalid range: {min_val} > {max_val}.")
             return None
+        self.add_log(f"[Debug] {label} settings parsed: {min_val} to {max_val}.")
         return min_val, max_val
 
     def _count_templates(self):
@@ -930,6 +953,7 @@ class MassDMApp(ctk.CTk):
         if change_name and not base_name:
             self.log_error("Profile name is empty.")
             self._set_input_valid(self.profile_name_input, False)
+            self.add_log("[Debug] Apply profile aborted: missing base name.")
             return
         self._set_input_valid(self.profile_name_input, True)
         avatar_data = None
@@ -937,11 +961,13 @@ class MassDMApp(ctk.CTk):
             if not avatar_path:
                 self.log_error("Avatar path is empty.")
                 self._set_input_valid(self.profile_avatar_input, False)
+                self.add_log("[Debug] Apply profile aborted: missing avatar path.")
                 return
             avatar_data, err = self.profile_updater.load_avatar_data(avatar_path)
             if err:
                 self.log_error(err)
                 self._set_input_valid(self.profile_avatar_input, False)
+                self.add_log("[Debug] Apply profile aborted: avatar load failed.")
                 return
         self._set_input_valid(self.profile_avatar_input, True)
         accounts = self.db.get_active_accounts("discord")
@@ -1038,7 +1064,13 @@ class MassDMApp(ctk.CTk):
         proxy_pool_count = len(self.db.get_proxy_pool())
         invite_count = self._count_invites()
         template_count = self._count_templates()
-        settings_status = "tak" if self.settings_loaded else "nie"
+        settings_status = "yes" if self.settings_loaded else "no"
+
+        self.add_log(
+            "[Debug] Workflow status refresh: "
+            f"accounts={account_count}, proxies={proxy_count}, pool={proxy_pool_count}, "
+            f"invites={invite_count}, templates={template_count}, settings_loaded={self.settings_loaded}."
+        )
 
         self.step_accounts_label.configure(text=f"1. Accounts: {account_count}")
         self.step_proxies_label.configure(text=f"2. Proxy: {proxy_count}")
@@ -1051,9 +1083,11 @@ class MassDMApp(ctk.CTk):
         self.workflow_next_btn.configure(state="normal" if can_next else "disabled")
 
     def advance_workflow(self):
+        self.add_log("[UI] Workflow advance requested.")
         self._set_workflow_stage("join")
 
     def _set_workflow_stage(self, stage):
+        self.add_log(f"[Debug] Workflow stage set: {stage}.")
         self.workflow_stage = stage
         joiner_enabled = self.module_vars["joiner"].get()
         scraper_enabled = self.module_vars["scraper"].get()
@@ -1280,12 +1314,14 @@ class MassDMApp(ctk.CTk):
         self.check_for_updates()
 
     def _check_for_updates_worker(self, endpoint):
+        self.add_log(f"[Debug] Update check started: endpoint={endpoint}.")
         try:
             with request.urlopen(endpoint, timeout=10) as response:
                 payload = response.read().decode("utf-8")
             data = json.loads(payload)
         except (URLError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             self.add_log(f"[Updater] Failed to fetch version: {exc}")
+            self.add_log("[Debug] Update check failed while fetching/parsing response.")
             self.after(0, lambda: self._set_version_status("Last check: error"))
             self.after(0, lambda: self._handle_update_error("Failed to fetch version info."))
             return
@@ -1304,6 +1340,7 @@ class MassDMApp(ctk.CTk):
         files_payload = data.get("files")
         if not latest:
             self.add_log("[Updater] Missing latest_version/version field in response.")
+            self.add_log("[Debug] Update check failed: missing latest version field.")
             self.after(0, lambda: self._set_version_status("Last check: invalid response"))
             return
 
@@ -1330,6 +1367,7 @@ class MassDMApp(ctk.CTk):
             self.after(0, lambda: self._set_update_status("Update: none"))
         self.after(0, lambda: self._set_version_status(f"Last check: {latest}"))
         self.after(0, lambda: self._handle_update_result(latest, update_available))
+        self.add_log(f"[Debug] Update check completed. Available={update_available}.")
 
     def _handle_update_result(self, latest, update_available):
         if update_available:
@@ -1382,7 +1420,7 @@ class MassDMApp(ctk.CTk):
                 return
             self.after(0, self.refresh_build_number_display)
             if updated:
-                self.after(0, lambda: self.show_notification("Zaktualizowano build number.", level="success"))
+                self.after(0, lambda: self.show_notification("Build number updated.", level="success"))
             else:
                 self.after(0, lambda: self.show_notification("No new build number data.", level="info"))
 
@@ -1829,6 +1867,7 @@ class MassDMApp(ctk.CTk):
 
     def _handle_add_account_result(self, token, proxy, dm_limit, join_limit, status, info):
         try:
+            self.add_log(f"[Debug] Add account validation result: status={status}, info={info}.")
             if status == "unauthorized":
                 self.log_error(f"Invalid token: {info}.")
                 return
@@ -1856,6 +1895,7 @@ class MassDMApp(ctk.CTk):
         if attempt > self.max_unverified_retries:
             self.add_log(f"[Accounts] Account {account_id}: still unverified, stopping retries.")
             return
+        self.add_log(f"[Debug] Account {account_id}: scheduling recheck attempt {attempt}.")
         timer = threading.Timer(
             self.unverified_retry_delay_seconds,
             self._run_account_recheck,
@@ -1865,6 +1905,7 @@ class MassDMApp(ctk.CTk):
         timer.start()
 
     def _run_account_recheck(self, account_id, token, proxy, attempt):
+        self.add_log(f"[Debug] Account {account_id}: recheck attempt {attempt} started.")
         status, info = self.token_manager.validate_token(token, proxy)
         self.after(
             0,
@@ -1872,6 +1913,7 @@ class MassDMApp(ctk.CTk):
         )
 
     def _handle_account_recheck_result(self, account_id, status, info, token, proxy, attempt):
+        self.add_log(f"[Debug] Account {account_id}: recheck result status={status}, info={info}.")
         if status == "ok":
             self.db.update_account_status(account_id, "Active")
             self.add_log(f"[Accounts] Account {account_id} verified: {info}.")
@@ -1906,6 +1948,10 @@ class MassDMApp(ctk.CTk):
         if not missing_ids:
             self.log_error("No accounts without proxy.")
             return 0, proxies, 0
+        self.add_log(
+            f"[Debug] Assigning proxies to {len(missing_ids)} account(s). "
+            f"Available proxies: {len(proxies)}."
+        )
         assign_count = min(len(proxies), len(missing_ids))
         for acc_id, proxy in zip(missing_ids, proxies):
             self.db.update_account_proxy(acc_id, proxy)
@@ -2920,6 +2966,7 @@ class MassDMApp(ctk.CTk):
         self.add_log("[UI] Settings window closed.")
 
     def open_logs_window(self):
+        self.add_log("[UI] Open logs requested.")
         if self.log_window and self.log_window.winfo_exists():
             try:
                 self.log_window.lift()
@@ -3882,6 +3929,7 @@ class MassDMApp(ctk.CTk):
         thread.start()
 
     def _run_captcha_check(self, provider, api_key):
+        self.add_log(f"[Debug] Captcha balance check started ({provider}).")
         ok, msg = self.captcha_solver.check_balance(provider, api_key)
         if ok:
             self.add_log(f"[Captcha] OK ({provider}) - {msg}")

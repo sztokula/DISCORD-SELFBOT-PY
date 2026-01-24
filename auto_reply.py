@@ -81,48 +81,62 @@ class AutoReplyService:
             user_id = user.get("id")
             if user_id:
                 self._self_user_ids[token] = user_id
+                self._log(f"[Debug] Gateway READY received: self_user_id={user_id}.")
             return
         if event_type != "MESSAGE_CREATE":
             return
         if not self._auto_reply_enabled():
+            self._log("[Debug] Auto-reply disabled; MESSAGE_CREATE ignored.")
             return
         if not self.responder.is_enabled():
+            self._log("[Debug] AI responder disabled; MESSAGE_CREATE ignored.")
             return
         if data.get("guild_id"):
+            self._log("[Debug] Guild message ignored for auto-reply.")
             return
         author = data.get("author") or {}
         author_id = author.get("id")
         if not author_id:
+            self._log("[Debug] MESSAGE_CREATE ignored: missing author_id.")
             return
         if author.get("bot"):
+            self._log("[Debug] MESSAGE_CREATE ignored: author is bot.")
             return
         if author_id and author_id == self._self_user_ids.get(token):
+            self._log("[Debug] MESSAGE_CREATE ignored: self message.")
             return
         message_id = data.get("id")
         if not message_id:
+            self._log("[Debug] MESSAGE_CREATE ignored: missing message_id.")
             return
         channel_id = data.get("channel_id")
         if not channel_id:
+            self._log("[Debug] MESSAGE_CREATE ignored: missing channel_id.")
             return
         if self._reply_once_per_conversation():
             self._prune_replied_channels()
             if channel_id in self._replied_channels:
+                self._log("[Debug] MESSAGE_CREATE ignored: already replied in this channel.")
                 return
         last_id = self._last_message_id_by_channel.get(channel_id)
         if last_id:
             try:
                 if int(message_id) <= int(last_id):
+                    self._log("[Debug] MESSAGE_CREATE ignored: older or duplicate message_id.")
                     return
             except Exception:
                 if message_id == last_id:
+                    self._log("[Debug] MESSAGE_CREATE ignored: duplicate message_id.")
                     return
         self._last_message_id_by_channel[channel_id] = message_id
         recent = self._recent_by_token[token]
         if message_id in recent:
+            self._log("[Debug] MESSAGE_CREATE ignored: recently processed message_id.")
             return
         recent.append(message_id)
         content = (data.get("content") or "").strip()
         if not channel_id or not content:
+            self._log("[Debug] MESSAGE_CREATE ignored: empty content.")
             return
         if self._reply_once_per_conversation():
             self._replied_channels[channel_id] = time.monotonic()

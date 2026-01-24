@@ -665,6 +665,7 @@ class DiscordJoiner:
         )
 
     def _click_verification_button(self, client, guild_id, channel_id):
+        self.log(f"[Debug] Attempting verification click (guild={guild_id}, channel={channel_id}).")
         messages = self._fetch_channel_messages(client, channel_id, limit=50)
         msg, custom_id = self._find_verification_button(messages)
         if not msg or not custom_id:
@@ -708,6 +709,7 @@ class DiscordJoiner:
         return True
 
     def _accept_rules(self, client, guild_id):
+        self.log(f"[Debug] Accepting rules for guild {guild_id}.")
         url = f"https://discord.com/api/v9/guilds/{guild_id}/member-verification?with_guild=false"
         start = time.monotonic()
         response = client.get(url)
@@ -742,6 +744,7 @@ class DiscordJoiner:
         return ok
 
     def _complete_onboarding(self, client, guild_id, role_whitelist=None):
+        self.log(f"[Debug] Completing onboarding for guild {guild_id}.")
         url = f"https://discord.com/api/v9/guilds/{guild_id}/onboarding"
         start = time.monotonic()
         response = client.get(url)

@@ -47,6 +47,7 @@ class OpenAIResponder:
         system_prompt = self._get_system_prompt()
         if author_name:
             system_prompt = f"{system_prompt}\n\nUser name: {author_name}"
+        self._log(f"[Debug] OpenAI request: model={model}.")
 
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -70,6 +71,7 @@ class OpenAIResponder:
                 )
             except Exception as exc:
                 last_error = exc
+                self._log(f"[Debug] OpenAI request exception (attempt {attempt + 1}/{max_retries}): {exc}")
                 wait = min(8.0, 1.5 * (2 ** attempt))
                 time.sleep(wait)
                 continue
@@ -83,6 +85,7 @@ class OpenAIResponder:
             if response.status_code in {429, 500, 502, 503, 504}:
                 body_preview = response.text[:200] if response.text else ""
                 self._log(f"[AI] OpenAI error: {response.status_code} {body_preview}")
+                self._log(f"[Debug] OpenAI retrying (attempt {attempt + 1}/{max_retries}).")
                 wait = min(8.0, 1.5 * (2 ** attempt))
                 time.sleep(wait)
                 continue

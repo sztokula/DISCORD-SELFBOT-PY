@@ -104,6 +104,7 @@ class DiscordScraper:
         self.is_scraping = True
         added_any = False
         self.log(f"[Scraper] Starting scrape from channel {channel_id}...")
+        self.log(f"[Debug] Scrape history params: channel_id={channel_id}, limit={limit}.")
         
         headers = {
             "Authorization": token,
@@ -190,6 +191,7 @@ class DiscordScraper:
         self.is_scraping = True
         added_any = False
         self.log(f"[Scraper] Starting member list fetch for guild {guild_id}...")
+        self.log(f"[Debug] Scrape guild params: guild_id={guild_id}, limit={limit}.")
 
         headers = {
             "Authorization": token,

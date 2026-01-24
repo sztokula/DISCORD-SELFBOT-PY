@@ -136,6 +136,9 @@ class GatewayClient:
             payload = self._safe_json(message)
             if not payload:
                 continue
+            event_type = payload.get("t")
+            if event_type == "READY":
+                self._log("[Gateway] READY received")
             if self.on_event:
                 try:
                     self.on_event(self.token, payload)
@@ -147,8 +150,10 @@ class GatewayClient:
             if op == 1:  # HEARTBEAT request
                 await self._send_heartbeat(ws)
             elif op == 7:  # RECONNECT
+                self._log("[Gateway] RECONNECT requested")
                 break
             elif op == 9:  # INVALID_SESSION
+                self._log("[Gateway] INVALID_SESSION received")
                 break
             elif op == 11:  # HEARTBEAT ACK
                 continue

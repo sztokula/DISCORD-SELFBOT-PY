@@ -394,6 +394,7 @@ class DiscordWorker:
                         self.log(f"[Dry-Run] Waiting {int(delay)}s before DM to {user_id}.")
                         self._sleep_with_stop(delay)
             return True, final_msg
+        self.log(f"[Debug] DM send start: user_id={user_id}.")
         user_agent = USER_AGENT
         headers = {
             "Authorization": token,
@@ -476,6 +477,7 @@ class DiscordWorker:
 
                 # Message randomization (templates + spintax).
                 final_msg = self.render_message(message_template)
+                self.log(f"[Debug] DM channel ready: channel_id={channel_id}.")
 
                 # Prefetch last messages + ack before sending DM.
                 self._prefetch_channel_messages(client, channel_id, limit=50)
@@ -486,6 +488,7 @@ class DiscordWorker:
                     start = time.monotonic()
                     typing_resp = client.post(typing_url)
                     self._record_request(time.monotonic() - start, typing_resp)
+                    self.log(f"[Debug] Typing indicator sent: channel_id={channel_id}.")
                 except Exception:
                     pass
                 self._sleep_with_stop(self._typing_delay_seconds(final_msg))
@@ -575,6 +578,7 @@ class DiscordWorker:
             return False, "Empty message"
         if len(message_content) > 2000:
             message_content = message_content[:2000]
+        self.log(f"[Debug] Channel send start: channel_id={channel_id}.")
         user_agent = USER_AGENT
         headers = {
             "Authorization": token,
@@ -600,6 +604,7 @@ class DiscordWorker:
                     start = time.monotonic()
                     typing_resp = client.post(typing_url)
                     self._record_request(time.monotonic() - start, typing_resp)
+                    self.log(f"[Debug] Typing indicator sent: channel_id={channel_id}.")
                 except Exception:
                     pass
                 self._sleep_with_stop(self._typing_delay_seconds(message_content))
