@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
 
-from proxy_utils import httpx_client
+from proxy_utils import httpx_client, normalize_proxy
 from client_identity import USER_AGENT
 from super_properties import ensure_discord_headers
 
@@ -41,6 +41,13 @@ class BuildNumberUpdater:
         if not force and not self._should_check():
             return False
 
+        proxy = self._select_proxy()
+        if self._is_proxy_required() and not proxy:
+            self._log("[Build] Proxy required but no proxy available. Skipping update.")
+            checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._set_checked_at(checked_at)
+            return False
+
         headers = {"User-Agent": USER_AGENT}
         ensure_discord_headers(headers, self.db, add_super_properties=False)
         js_urls = []
@@ -48,7 +55,7 @@ class BuildNumberUpdater:
         source_url = None
         checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        with httpx_client(None, headers=headers, timeout=15.0) as client:
+        with httpx_client(proxy, headers=headers, timeout=15.0) as client:
             response = client.get(LOGIN_URL)
             if response.status_code != 200:
                 self._log(f"[Build] Login fetch failed: {response.status_code}")
@@ -94,6 +101,46 @@ class BuildNumberUpdater:
         except (TypeError, ValueError):
             return True
         return datetime.now() - last >= timedelta(seconds=self.interval_seconds)
+
+    def _is_proxy_required(self):
+        try:
+            value = self.db.get_setting("require_proxy", None)
+        except Exception:
+            return False
+        if value in (None, ""):
+            return False
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _select_proxy(self):
+        if not self._is_proxy_required():
+            return None
+        try:
+            scrape_proxy = (self.db.get_setting("scrape_proxy", "") or "").strip()
+        except Exception:
+            scrape_proxy = ""
+        if scrape_proxy:
+            normalized = normalize_proxy(scrape_proxy)
+            if normalized:
+                return normalized
+        try:
+            pool = self.db.get_proxy_pool()
+        except Exception:
+            pool = []
+        for proxy in pool or []:
+            normalized = normalize_proxy(proxy)
+            if normalized:
+                return normalized
+        try:
+            proxies = self.db.get_account_proxies()
+        except Exception:
+            proxies = []
+        for _acc_id, proxy in proxies or []:
+            normalized = normalize_proxy(proxy)
+            if normalized:
+                return normalized
+        return None
 
     def _set_checked_at(self, timestamp):
         self.db.set_setting("client_build_number_checked_at", timestamp)

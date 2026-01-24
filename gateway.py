@@ -225,15 +225,64 @@ class GatewayManager:
             task.cancel()
 
     def _load_active_accounts(self):
+        require_proxy = self._is_proxy_required()
+        if require_proxy:
+            try:
+                overview = self.db.get_accounts_overview()
+            except Exception:
+                overview = []
+            for acc_id, status, proxy, *_rest in overview:
+                status_value = (status or "").strip().casefold()
+                if status_value != "unverified":
+                    continue
+                normalized = normalize_proxy(proxy) if proxy else ""
+                if not normalized:
+                    continue
+                if normalized != proxy:
+                    try:
+                        self.db.update_account_proxy(acc_id, normalized)
+                    except Exception:
+                        pass
+                try:
+                    self.db.update_account_status(acc_id, "Active")
+                    self._log(f"[Info] Account {acc_id} restored to Active (proxy set).")
+                except Exception:
+                    self._log(f"[Error] Failed to restore account {acc_id} to Active.")
+
         accounts = self.db.get_active_accounts("discord")
         results = []
         for acc in accounts:
+            acc_id = acc[0]
             token = acc[2]
             proxy = normalize_proxy(acc[3]) if len(acc) > 3 else ""
             proxy = proxy or None
+            if require_proxy and not proxy:
+                if token:
+                    suffix = str(token)[-6:]
+                else:
+                    suffix = "unknown"
+                self._log(f"[Warn] Gateway skipped token without proxy (token=...{suffix}).")
+                if acc_id is not None:
+                    try:
+                        self.db.update_account_status(acc_id, "Unverified")
+                        self._log(f"[Info] Account {acc_id} marked Unverified (missing proxy).")
+                    except Exception:
+                        self._log(f"[Error] Failed to mark account {acc_id} Unverified.")
+                continue
             if token:
                 results.append((token, proxy))
         return results
+
+    def _is_proxy_required(self):
+        try:
+            value = self.db.get_setting("require_proxy", None)
+        except Exception:
+            return False
+        if value in (None, ""):
+            return False
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
 
     def _log(self, message):
         if self.log:

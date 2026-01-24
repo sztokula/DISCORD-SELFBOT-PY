@@ -489,6 +489,16 @@ class DatabaseManager:
         if token_to_export:
             self._append_banned_dead_token(token_to_export)
 
+    def get_account_status(self, account_id):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT status FROM accounts WHERE id = ?", (account_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return row[0]
+
     def update_account_proxy(self, account_id, proxy):
         with self.write_lock:
             conn = self.get_connection()

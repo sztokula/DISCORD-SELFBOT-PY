@@ -1,10 +1,13 @@
 import time
+from urllib.parse import urlparse
 
 import httpx
 
 from proxy_utils import normalize_proxy, httpx_client
 from super_properties import set_super_properties_header
 from client_identity import USER_AGENT
+
+DEFAULT_PROXY_CHECK_ENDPOINT = "https://discord.com/api/v9/experiments"
 
 class TokenManager:
     def __init__(self, db_manager, log_callback, metrics=None, telemetry=None):
@@ -46,7 +49,7 @@ class TokenManager:
                 headers={"User-Agent": user_agent},
             ) as client:
                 set_super_properties_header(client.headers, self.db)
-                resp = client.get("https://discord.com/api/v9/experiments")
+                resp = client.get(self._get_proxy_check_endpoint())
             if resp.status_code == 407:
                 ok, err = False, "Proxy auth failed (407)."
             else:
@@ -55,6 +58,15 @@ class TokenManager:
             ok, err = False, f"Proxy error: {exc}"
         self._proxy_check_cache[proxy] = {"ok": ok, "err": err, "ts": now}
         return ok, err
+
+    def _get_proxy_check_endpoint(self):
+        raw = (self.db.get_setting("proxy_check_endpoint", "") or "").strip()
+        if not raw:
+            return DEFAULT_PROXY_CHECK_ENDPOINT
+        parsed = urlparse(raw)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return DEFAULT_PROXY_CHECK_ENDPOINT
+        return raw
 
     def _fetch_token_info(self, token, proxy=None):
         if self._is_proxy_required() and not proxy:

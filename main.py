@@ -36,6 +36,7 @@ ctk.set_default_color_theme("blue")
 APP_VERSION = "1.0"
 DEFAULT_VERSION_ENDPOINT = "https://updates.example.com/massdm/version.json"
 TRUSTED_UPDATE_HOSTS = {"updates.example.com"}
+DEFAULT_PROXY_CHECK_ENDPOINT = "https://discord.com/api/v9/experiments"
 
 class MassDMApp(ctk.CTk):
     def __init__(self):
@@ -406,9 +407,31 @@ class MassDMApp(ctk.CTk):
                 assigned.add(normalized)
                 if normalized != proxy:
                     self.db.update_account_proxy(acc_id, normalized)
+                    self._restore_account_if_proxy_set(acc_id, normalized)
             else:
                 assigned.add(proxy)
         return assigned
+
+    def _restore_account_if_proxy_set(self, acc_id, proxy):
+        if not self._is_proxy_required():
+            return
+        if not acc_id:
+            return
+        normalized = self._normalize_proxy(proxy)
+        if not normalized:
+            return
+        status = None
+        try:
+            status = self.db.get_account_status(acc_id)
+        except Exception:
+            status = None
+        if status and status.strip().casefold() != "unverified":
+            return
+        try:
+            self.db.update_account_status(acc_id, "Active")
+            self.add_log(f"[Info] Account {acc_id} restored to Active (proxy set).")
+        except Exception:
+            self.add_log(f"[Error] Failed to restore account {acc_id} to Active.")
 
     def _pop_proxy_from_pool(self, exclude=None):
         proxy = self.db.pop_proxy_from_pool(exclude)
@@ -433,6 +456,7 @@ class MassDMApp(ctk.CTk):
             ok, err = self._check_proxy_alive(candidate)
             if ok:
                 self.db.update_account_proxy(acc_id, candidate)
+                self._restore_account_if_proxy_set(acc_id, candidate)
                 assigned_set.add(candidate)
                 self.add_log(f"[Proxy] {context_label}: account {acc_id} swapped to pool proxy.")
                 return candidate, None
@@ -451,6 +475,7 @@ class MassDMApp(ctk.CTk):
             self.add_log("[Debug] Proxy check cache hit.")
             return cached["ok"], cached["err"]
         try:
+            endpoint = self._get_proxy_check_endpoint()
             headers = {"User-Agent": USER_AGENT}
             set_super_properties_header(headers, self.db)
             with httpx_client(
@@ -458,7 +483,7 @@ class MassDMApp(ctk.CTk):
                 timeout=httpx.Timeout(8.0),
                 headers=headers,
             ) as client:
-                resp = client.get("https://discord.com/api/v9/experiments")
+                resp = client.get(endpoint)
             if resp.status_code == 407:
                 ok, err = False, "Proxy auth failed (407)."
             else:
@@ -472,6 +497,16 @@ class MassDMApp(ctk.CTk):
         else:
             self.add_log(f"[Debug] Proxy check failed: {err}.")
         return ok, err
+
+    def _get_proxy_check_endpoint(self):
+        raw = (self.db.get_setting("proxy_check_endpoint", "") or "").strip()
+        if not raw:
+            return DEFAULT_PROXY_CHECK_ENDPOINT
+        parsed = urlparse(raw)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            self.log_error("Invalid proxy check endpoint. Using default.")
+            return DEFAULT_PROXY_CHECK_ENDPOINT
+        return raw
 
     def _is_proxy_format_valid(self, proxy):
         return bool(self._normalize_proxy(proxy))
@@ -1329,6 +1364,25 @@ class MassDMApp(ctk.CTk):
             self.db.set_setting("version_endpoint", None)
             self.add_log("[Settings] Removed version endpoint.")
 
+    def save_proxy_settings(self):
+        if not hasattr(self, "proxy_check_endpoint_input"):
+            return
+        if not self.proxy_check_endpoint_input.winfo_exists():
+            return
+        raw = self.proxy_check_endpoint_input.get().strip()
+        if not raw:
+            self.db.set_setting("proxy_check_endpoint", None)
+            self.add_log("[Settings] Cleared proxy check endpoint.")
+            return
+        parsed = urlparse(raw)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            self.log_error("Invalid proxy check endpoint format.")
+            self._set_input_valid(self.proxy_check_endpoint_input, False)
+            return
+        self._set_input_valid(self.proxy_check_endpoint_input, True)
+        self.db.set_setting("proxy_check_endpoint", raw)
+        self.add_log("[Settings] Saved proxy check endpoint.")
+
     def check_for_updates(self):
         self.add_log("[UI] Check for updates requested.")
         endpoint_entry = None
@@ -1940,6 +1994,7 @@ class MassDMApp(ctk.CTk):
                 )
                 self._schedule_account_recheck(account_id, token, proxy, attempt=1)
 
+            self._restore_account_if_proxy_set(account_id, proxy)
             self._reset_add_account_form()
             self.refresh_accounts_overview()
         finally:
@@ -2009,6 +2064,7 @@ class MassDMApp(ctk.CTk):
         assign_count = min(len(proxies), len(missing_ids))
         for acc_id, proxy in zip(missing_ids, proxies):
             self.db.update_account_proxy(acc_id, proxy)
+            self._restore_account_if_proxy_set(acc_id, proxy)
         if assign_count:
             assigned_set = set(proxies[:assign_count])
             pool = self.db.get_proxy_pool()
@@ -3047,6 +3103,7 @@ class MassDMApp(ctk.CTk):
             self.save_captcha_settings()
             self.save_ai_settings()
             self.save_version_settings()
+            self.save_proxy_settings()
             self.save_status_settings()
             self.save_profile_settings()
             self.save_joiner_settings()
@@ -3344,51 +3401,63 @@ class MassDMApp(ctk.CTk):
             width=350,
         )
         self.proxy_input.grid(row=4, column=0, padx=10, pady=5)
+        ctk.CTkLabel(
+            self.acc_frame,
+            text="Proxy check endpoint (http/https)",
+        ).grid(row=5, column=0, padx=10, pady=(0, 2), sticky="w")
+        self.proxy_check_endpoint_input = ctk.CTkEntry(
+            self.acc_frame,
+            placeholder_text=DEFAULT_PROXY_CHECK_ENDPOINT,
+            width=350,
+        )
+        self.proxy_check_endpoint_input.grid(row=6, column=0, padx=10, pady=5)
+        stored_endpoint = (self.db.get_setting("proxy_check_endpoint", "") or "").strip()
+        self.proxy_check_endpoint_input.insert(0, stored_endpoint or DEFAULT_PROXY_CHECK_ENDPOINT)
         self.require_proxy_toggle = ctk.CTkCheckBox(
             self.acc_frame,
             text="Require proxy for all actions",
             variable=self.require_proxy_var,
         )
-        self.require_proxy_toggle.grid(row=5, column=0, padx=10, pady=(0, 5), sticky="w")
-        ctk.CTkLabel(self.acc_frame, text="DM daily limit").grid(row=6, column=0, padx=10, pady=(0, 2), sticky="w")
+        self.require_proxy_toggle.grid(row=7, column=0, padx=10, pady=(0, 5), sticky="w")
+        ctk.CTkLabel(self.acc_frame, text="DM daily limit").grid(row=8, column=0, padx=10, pady=(0, 2), sticky="w")
         self.dm_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="DM daily limit (e.g. 15)", width=350)
-        self.dm_limit_input.grid(row=7, column=0, padx=10, pady=5)
+        self.dm_limit_input.grid(row=9, column=0, padx=10, pady=5)
         self.dm_limit_input.insert(0, "15")
-        ctk.CTkLabel(self.acc_frame, text="Join daily limit").grid(row=8, column=0, padx=10, pady=(0, 2), sticky="w")
+        ctk.CTkLabel(self.acc_frame, text="Join daily limit").grid(row=10, column=0, padx=10, pady=(0, 2), sticky="w")
         self.join_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Join daily limit (e.g. 5)", width=350)
-        self.join_limit_input.grid(row=9, column=0, padx=10, pady=5)
+        self.join_limit_input.grid(row=11, column=0, padx=10, pady=5)
         self.join_limit_input.insert(0, "5")
         self.add_acc_btn = ctk.CTkButton(self.acc_frame, text="Add Account", command=self.add_account)
-        self.add_acc_btn.grid(row=2, column=1, rowspan=6, padx=10, pady=5, sticky="ns")
+        self.add_acc_btn.grid(row=2, column=1, rowspan=8, padx=10, pady=5, sticky="ns")
         self.proxy_test_btn = ctk.CTkButton(
             self.acc_frame,
             text="Test Proxy",
             fg_color="#3498db",
             command=self.test_proxy_settings,
         )
-        self.proxy_test_btn.grid(row=8, column=1, padx=10, pady=5)
+        self.proxy_test_btn.grid(row=10, column=1, padx=10, pady=5)
         self.proxy_test_all_btn = ctk.CTkButton(
             self.acc_frame,
             text="Test All Proxies",
             fg_color="#1abc9c",
             command=self.test_all_account_proxies,
         )
-        self.proxy_test_all_btn.grid(row=9, column=1, padx=10, pady=(0, 5))
-        ctk.CTkLabel(self.acc_frame, text="Account ID to remove").grid(row=10, column=0, padx=10, pady=(0, 2), sticky="w")
+        self.proxy_test_all_btn.grid(row=11, column=1, padx=10, pady=(0, 5))
+        ctk.CTkLabel(self.acc_frame, text="Account ID to remove").grid(row=12, column=0, padx=10, pady=(0, 2), sticky="w")
         self.remove_account_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Account ID to remove", width=350)
-        self.remove_account_input.grid(row=11, column=0, padx=10, pady=5)
+        self.remove_account_input.grid(row=13, column=0, padx=10, pady=5)
         self.remove_account_btn = ctk.CTkButton(self.acc_frame, text="Remove Account", fg_color="#e74c3c", command=self.remove_account_by_id)
-        self.remove_account_btn.grid(row=11, column=1, padx=10, pady=5)
+        self.remove_account_btn.grid(row=13, column=1, padx=10, pady=5)
         self.export_banlist_plaintext_toggle = ctk.CTkCheckBox(
             self.acc_frame,
             text="Export banlist tokens in plaintext (unsafe)",
             variable=self.export_banned_tokens_plaintext_var,
             command=self.on_export_plaintext_toggle,
         )
-        self.export_banlist_plaintext_toggle.grid(row=12, column=0, columnspan=2, padx=10, pady=(5, 0), sticky="w")
+        self.export_banlist_plaintext_toggle.grid(row=14, column=0, columnspan=2, padx=10, pady=(5, 0), sticky="w")
 
         self.bulk_import_frame = ctk.CTkFrame(self.acc_frame, fg_color="transparent")
-        self.bulk_import_frame.grid(row=13, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="ew")
+        self.bulk_import_frame.grid(row=15, column=0, columnspan=2, padx=10, pady=(10, 0), sticky="ew")
         self.bulk_import_frame.grid_columnconfigure(0, weight=1)
         self.bulk_import_frame.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(

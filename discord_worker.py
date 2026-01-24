@@ -686,8 +686,6 @@ class DiscordWorker:
             except Exception as exc:
                 return False, str(exc)
         return False, "Rate Limit (message)"
-            except Exception as e:
-                return False, str(e)
 
     def _is_captcha_error(self, message):
         return "captcha" in (message or "").lower()
