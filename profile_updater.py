@@ -1,11 +1,15 @@
 import base64
+import hashlib
+import random
 import time
+from datetime import datetime
 from pathlib import Path
 
 import httpx
 from proxy_utils import httpx_client
 from super_properties import set_super_properties_header
 from client_identity import USER_AGENT
+from behavior_version import CURRENT_BEHAVIOR_VERSION, get_behavior_version, seeded_rng
 
 
 class ProfileUpdater:
@@ -34,6 +38,38 @@ class ProfileUpdater:
                 pass
         wait_time *= self.backoff_factor ** attempt
         time.sleep(min(wait_time, 60))
+
+    def _get_setting_float(self, key, default, min_value=None, max_value=None):
+        try:
+            raw = self.db.get_setting(key, "")
+        except Exception:
+            raw = ""
+        if raw in (None, ""):
+            value = default
+        else:
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                value = default
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+
+    def _parse_ts(self, value):
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value))
+        except Exception:
+            return None
+
+    def _seconds_since(self, value):
+        ts = self._parse_ts(value)
+        if not ts:
+            return None
+        return max(0.0, (datetime.now() - ts).total_seconds())
 
     def load_avatar_data(self, avatar_path):
         if not avatar_path:
@@ -79,17 +115,73 @@ class ProfileUpdater:
             self.log("[Profile] Nothing to update (name/avatar disabled).")
             return
 
+        global_min_interval = self._get_setting_float("profile_min_interval_seconds", 3600.0, 0.0, None)
+        name_min_interval = self._get_setting_float("profile_name_min_interval_seconds", 21600.0, 0.0, None)
+        avatar_min_interval = self._get_setting_float("profile_avatar_min_interval_seconds", 86400.0, 0.0, None)
+        step_delay_min = self._get_setting_float("profile_step_delay_min_seconds", 1.0, 0.0, None)
+        step_delay_max = self._get_setting_float("profile_step_delay_max_seconds", 3.0, step_delay_min, None)
+
         for index, acc in enumerate(accounts, start=1):
             acc_id, _, token, proxy, _, _, _, _, _, _, _ = acc
-            payload = {}
+            history = self.db.get_profile_history(acc_id) or {}
+            version = get_behavior_version(self.db, token, CURRENT_BEHAVIOR_VERSION)
+            base_rng = seeded_rng(token or "anon", version, "profile_update")
+            recent_seconds = self._seconds_since(history.get("updated_at"))
+            if global_min_interval and recent_seconds is not None and recent_seconds < global_min_interval:
+                self.log(
+                    f"[Profile] Account {acc_id}: skipped (recent profile change {int(recent_seconds)}s ago)."
+                )
+                continue
+
+            candidates = []
+            desired_name = None
+            avatar_hash = None
             if change_name:
                 suffix = str(index) if append_suffix else ""
-                payload["username"] = f"{base_name}{suffix}"
-            if change_avatar:
-                payload["avatar"] = avatar_data
+                desired_name = f"{base_name}{suffix}"
+                if desired_name:
+                    last_name = history.get("last_username")
+                    if desired_name != last_name:
+                        elapsed = self._seconds_since(history.get("name_updated_at"))
+                        if elapsed is None or elapsed >= name_min_interval:
+                            candidates.append(("username", desired_name, elapsed))
+            if change_avatar and avatar_data:
+                avatar_hash = hashlib.sha256(avatar_data.encode("utf-8")).hexdigest()
+                last_hash = history.get("last_avatar_hash")
+                if avatar_hash and avatar_hash != last_hash:
+                    elapsed = self._seconds_since(history.get("avatar_updated_at"))
+                    if elapsed is None or elapsed >= avatar_min_interval:
+                        candidates.append(("avatar", avatar_data, elapsed))
+
+            if not candidates:
+                self.log(f"[Profile] Account {acc_id}: no eligible profile changes.")
+                continue
+
+            if len(candidates) > 1:
+                def _elapsed_value(item):
+                    elapsed_val = item[2]
+                    return elapsed_val if elapsed_val is not None else 1e9
+                candidates.sort(key=_elapsed_value, reverse=True)
+                top = candidates[0]
+                if len(candidates) > 1 and _elapsed_value(candidates[0]) == _elapsed_value(candidates[1]):
+                    top = base_rng.choice(candidates[:2])
+                chosen = top
+            else:
+                chosen = candidates[0]
+
+            payload = {}
+            changed_name = False
+            changed_avatar = False
+            if chosen[0] == "username":
+                payload["username"] = chosen[1]
+                changed_name = True
+            elif chosen[0] == "avatar":
+                payload["avatar"] = chosen[1]
+                changed_avatar = True
+
             if not payload:
                 self.log("[Profile] Empty profile payload.")
-                return
+                continue
 
             user_agent = USER_AGENT
             headers = {
@@ -111,6 +203,18 @@ class ProfileUpdater:
                     response = client.patch("https://discord.com/api/v9/users/@me", json=payload)
                     self._record_request(time.monotonic() - start, response)
                     if response.status_code == 200:
+                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        try:
+                            self.db.update_profile_history(
+                                acc_id,
+                                username=payload.get("username") if changed_name else None,
+                                avatar_hash=avatar_hash if changed_avatar else None,
+                                name_updated_at=now_str if changed_name else None,
+                                avatar_updated_at=now_str if changed_avatar else None,
+                                updated_at=now_str,
+                            )
+                        except Exception:
+                            pass
                         self.log(f"[Profile] Account {acc_id}: profile updated.")
                         self.log(f"[Info] Profile updated for account {acc_id}.")
                         if self.telemetry:
@@ -119,8 +223,8 @@ class ProfileUpdater:
                                 user_agent,
                                 "profile_update",
                                 properties={
-                                    "change_name": bool(change_name),
-                                    "change_avatar": bool(change_avatar),
+                                    "change_name": bool(changed_name),
+                                    "change_avatar": bool(changed_avatar),
                                 },
                                 proxy=proxy,
                             )
@@ -151,4 +255,8 @@ class ProfileUpdater:
                     break
                 if not updated:
                     self.log(f"[Profile] Account {acc_id}: update failed after retries.")
-            time.sleep(1.0)
+            scale = base_rng.uniform(0.8, 1.2)
+            adj_min = max(0.0, step_delay_min * scale)
+            adj_max = max(adj_min, step_delay_max * scale)
+            delay = random.uniform(adj_min, adj_max) if adj_max > adj_min else adj_min
+            time.sleep(max(0.0, delay))

@@ -11,6 +11,7 @@ GATEWAY_URL = "wss://gateway.discord.gg/?v=9&encoding=json"
 from proxy_utils import normalize_proxy, ws_connect
 from super_properties import build_gateway_properties, get_token_user_agent
 from database import DatabaseManager
+from behavior_version import CURRENT_BEHAVIOR_VERSION, get_behavior_version, seeded_rng
 
 
 class GatewayClient:
@@ -26,6 +27,7 @@ class GatewayClient:
         on_disconnect: Optional[Callable[[str], None]] = None,
         on_event: Optional[Callable[[str, Dict], None]] = None,
         user_agent: Optional[str] = None,
+        behavior_version: Optional[str] = None,
     ):
         self.token = token
         self.log = log
@@ -45,12 +47,35 @@ class GatewayClient:
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread = None
         self.user_agent = user_agent
+        self.behavior_version = behavior_version or CURRENT_BEHAVIOR_VERSION
+        self._ready_event = asyncio.Event()
+        self._presence_task = None
+        self._init_random_profile()
+
+    def _init_random_profile(self):
+        base_rng = seeded_rng(self.token, self.behavior_version, "gateway_profile")
+        self._rng = random.Random(time.time_ns() ^ base_rng.getrandbits(64))
+        self._heartbeat_rng = random.Random(time.time_ns() ^ base_rng.getrandbits(64))
+        self._startup_delay = base_rng.uniform(0.0, 2.5)
+        self._identify_delay = base_rng.uniform(0.0, 1.2)
+        roll = base_rng.random()
+        if roll < 0.5:
+            self._presence_mode = "in_identify"
+        elif roll < 0.8:
+            self._presence_mode = "before_ready"
+        else:
+            self._presence_mode = "after_ready"
+        self._presence_delay = base_rng.uniform(0.5, 6.0)
+        self._heartbeat_jitter_ratio = base_rng.uniform(0.02, 0.12)
+        self._reconnect_delay_range = (3.0, 7.5)
 
     def stop(self):
         self._stop.set()
 
     async def run(self):
         reconnects = 0
+        if self._startup_delay:
+            await asyncio.sleep(self._startup_delay)
         while not self._stop.is_set():
             try:
                 async with ws_connect(
@@ -68,9 +93,11 @@ class GatewayClient:
                 self._log(f"[Gateway] reconnect attempt {reconnects} after error: {exc}")
                 self._log(f"[Gateway] reconnecting after error: {exc}")
                 self._log(f"[Error] Gateway connection failed: {exc}")
-                await asyncio.sleep(5)
+                delay = self._rng.uniform(*self._reconnect_delay_range)
+                await asyncio.sleep(delay)
 
     async def _handle_connection(self, ws):
+        self._ready_event.clear()
         if self.on_connect:
             try:
                 self.on_connect(self.token)
@@ -78,14 +105,18 @@ class GatewayClient:
                 pass
         hello_payload = self._normalize_ws_message(await ws.recv())
         interval = self._extract_heartbeat_interval(hello_payload)
+        if self._identify_delay:
+            await asyncio.sleep(self._identify_delay)
         await ws.send(json.dumps(self._identify_payload()))
         self._log("[Gateway] IDENTIFY sent")
         loop = asyncio.get_running_loop()
+        self._schedule_presence(ws)
         self._start_heartbeat_thread(ws, interval, loop)
         try:
             await self._recv_loop(ws)
         finally:
             self._stop_heartbeat_thread()
+            self._cancel_presence_task()
             try:
                 await asyncio.sleep(0)
             except Exception:
@@ -109,20 +140,25 @@ class GatewayClient:
         return interval
 
     def _identify_payload(self):
-        return {
+        payload = {
             "op": 2,
             "d": {
                 "token": self.token,
                 "properties": self.properties,
-                "presence": {
-                    "status": "online",
-                    "since": 0,
-                    "activities": [],
-                    "afk": False,
-                },
                 "compress": False,
                 "intents": int(self.intents) if self.intents is not None else 0,
             },
+        }
+        if self._presence_mode == "in_identify":
+            payload["d"]["presence"] = self._presence_payload()
+        return payload
+
+    def _presence_payload(self):
+        return {
+            "status": "online",
+            "since": 0,
+            "activities": [],
+            "afk": False,
         }
 
     async def _recv_loop(self, ws):
@@ -139,6 +175,7 @@ class GatewayClient:
                 continue
             event_type = payload.get("t")
             if event_type == "READY":
+                self._ready_event.set()
                 self._log("[Gateway] READY received")
             if self.on_event:
                 try:
@@ -181,20 +218,58 @@ class GatewayClient:
 
     def _heartbeat_loop_thread(self, ws, interval, loop):
         self._bump_thread_priority()
-        jitter = random.uniform(0.0, max(0.1, interval))
-        time.sleep(jitter)
+        jitter = max(0.1, interval * self._heartbeat_jitter_ratio)
+        initial = self._heartbeat_rng.uniform(0.0, jitter)
+        time.sleep(initial)
         while not self._stop.is_set() and not self._heartbeat_stop.is_set():
             try:
                 asyncio.run_coroutine_threadsafe(self._send_heartbeat(ws), loop)
             except Exception:
                 return
-            time.sleep(interval)
+            sleep_for = interval + self._heartbeat_rng.uniform(-jitter, jitter)
+            time.sleep(max(0.5, sleep_for))
 
     async def _send_heartbeat(self, ws):
         try:
             await ws.send(json.dumps({"op": 1, "d": self._last_sequence}))
         except Exception:
             return
+
+    def _schedule_presence(self, ws):
+        if self._presence_mode == "in_identify":
+            return
+        if self._presence_task and not self._presence_task.done():
+            return
+        if self._presence_mode == "before_ready":
+            self._presence_task = asyncio.create_task(
+                self._send_presence_after_delay(ws, self._presence_delay)
+            )
+        else:
+            self._presence_task = asyncio.create_task(
+                self._send_presence_after_ready(ws, self._presence_delay)
+            )
+
+    async def _send_presence_after_delay(self, ws, delay):
+        try:
+            await asyncio.sleep(delay)
+            await ws.send(json.dumps({"op": 3, "d": self._presence_payload()}))
+        except Exception:
+            return
+
+    async def _send_presence_after_ready(self, ws, delay):
+        try:
+            await self._ready_event.wait()
+            await asyncio.sleep(delay)
+            await ws.send(json.dumps({"op": 3, "d": self._presence_payload()}))
+        except Exception:
+            return
+
+    def _cancel_presence_task(self):
+        if self._presence_task and not self._presence_task.done():
+            try:
+                self._presence_task.cancel()
+            except Exception:
+                pass
 
     def _bump_thread_priority(self):
         if sys.platform != "win32":
@@ -261,15 +336,18 @@ class GatewayManager:
             self._log("[Gateway] No active tokens found.")
             return
         self._log(f"[Info] Gateway starting for {len(accounts)} token(s).")
+        random.shuffle(accounts)
         for token, proxy in accounts:
             user_agent = get_token_user_agent(self.db, token, proxy=proxy)
             properties = build_gateway_properties(self.db, token=token, proxy=proxy, user_agent=user_agent)
+            behavior_version = get_behavior_version(self.db, token, CURRENT_BEHAVIOR_VERSION)
             client = GatewayClient(
                 token,
                 log=self.log,
                 proxy=proxy,
                 properties=properties,
                 user_agent=user_agent,
+                behavior_version=behavior_version,
                 on_connect=self._mark_connected,
                 on_disconnect=self._mark_disconnected,
                 on_event=self.on_event,

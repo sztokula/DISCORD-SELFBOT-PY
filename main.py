@@ -6,28 +6,17 @@ import queue
 import re
 import threading
 import random
-import multiprocessing
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
 from urllib import request
 from urllib.error import URLError
 from urllib.parse import urlparse
+from bot_core import BotCore
 from database import DatabaseManager
-from captcha_solver import CaptchaSolver
-from discord_worker import DiscordWorker
-from scraper import DiscordScraper
-from status_changer import StatusChanger
-from joiner import DiscordJoiner # Import new module
-from token_manager import TokenManager
 from updater import UpdateManager, UpdateError
 from metrics import HealthMetrics
-from profile_updater import ProfileUpdater
-from build_number_updater import BuildNumberUpdater, CriticalBuildError
-from telemetry import TelemetryClient
-from gateway import run_gateway_process
-from openai_responder import OpenAIResponder
-from auto_reply import AutoReplyService
+from build_number_updater import CriticalBuildError
 from proxy_utils import normalize_proxy, httpx_client
 from super_properties import set_super_properties_header
 from client_identity import USER_AGENT
@@ -40,40 +29,6 @@ APP_VERSION = "1.0"
 DEFAULT_VERSION_ENDPOINT = "https://updates.example.com/massdm/version.json"
 TRUSTED_UPDATE_HOSTS = {"updates.example.com"}
 DEFAULT_PROXY_CHECK_ENDPOINT = "https://discord.com/api/v9/experiments"
-
-class GatewayProcessProxy:
-    def __init__(self, shared_status, stop_event, process):
-        self._shared_status = shared_status
-        self._stop_event = stop_event
-        self._process = process
-
-    def is_connected(self, token):
-        if not token:
-            return False
-        try:
-            return bool(self._shared_status.get(token))
-        except Exception:
-            return False
-
-    def stop(self):
-        if self._stop_event:
-            try:
-                self._stop_event.set()
-            except Exception:
-                pass
-        proc = self._process
-        if not proc:
-            return
-        try:
-            if proc.is_alive():
-                proc.join(timeout=2.0)
-        except Exception:
-            pass
-        try:
-            if proc.is_alive():
-                proc.terminate()
-        except Exception:
-            pass
 
 class MassDMApp(ctk.CTk):
     def __init__(self):
@@ -97,61 +52,22 @@ class MassDMApp(ctk.CTk):
         )
         
         self.metrics = HealthMetrics()
-        self.captcha_solver = CaptchaSolver(self.db, self.add_log)
-        self.telemetry = TelemetryClient(self.db, self.add_log)
-        self.gateway_mp_manager = multiprocessing.Manager()
-        self.gateway_shared_status = self.gateway_mp_manager.dict()
-        self.gateway_log_queue = multiprocessing.Queue()
-        self.gateway_event_queue = multiprocessing.Queue()
-        self.gateway_stop_event = multiprocessing.Event()
-        self.gateway_process = multiprocessing.Process(
-            target=run_gateway_process,
-            args=(
-                self.db.db_name,
-                self.gateway_log_queue,
-                self.gateway_event_queue,
-                self.gateway_shared_status,
-                self.gateway_stop_event,
-            ),
-            daemon=True,
-        )
-        self.gateway_process.start()
-        self.gateway_manager = GatewayProcessProxy(
-            self.gateway_shared_status,
-            self.gateway_stop_event,
-            self.gateway_process,
-        )
-        self.worker = DiscordWorker(
-            self.db,
-            self.add_log,
-            self.metrics,
-            self.captcha_solver,
-            self.telemetry,
-            self.gateway_manager,
-        )
-        self.openai_responder = OpenAIResponder(self.db, self.add_log)
-        self.auto_reply_service = AutoReplyService(
-            self.db,
-            self.worker,
-            self.openai_responder,
-            self.add_log,
-        )
+        self.core = BotCore(self.db, self.add_log, self.metrics, critical_callback=self.handle_critical_error)
+        self.captcha_solver = self.core.captcha_solver
+        self.telemetry = self.core.telemetry
+        self.gateway_log_queue = self.core.gateway_log_queue
+        self.gateway_event_queue = self.core.gateway_event_queue
+        self.gateway_manager = self.core.gateway_manager
+        self.worker = self.core.worker
+        self.openai_responder = self.core.openai_responder
+        self.auto_reply_service = self.core.auto_reply_service
+        self.scraper = self.core.scraper
+        self.status_changer = self.core.status_changer
+        self.joiner = self.core.joiner
+        self.token_manager = self.core.token_manager
+        self.profile_updater = self.core.profile_updater
+        self.build_number_updater = self.core.build_number_updater
         self.after(100, self._process_gateway_queues)
-        self.scraper = DiscordScraper(self.db, self.add_log, self.metrics, self.telemetry)
-        self.status_changer = StatusChanger(self.db, self.add_log, self.metrics, self.telemetry)
-        self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver, self.metrics, self.telemetry) # Initialization
-        self.token_manager = TokenManager(self.db, self.add_log, self.metrics, self.telemetry)
-        self.profile_updater = ProfileUpdater(self.db, self.add_log, self.metrics, self.telemetry)
-        self.build_number_updater = BuildNumberUpdater(
-            self.db,
-            self.add_log,
-            critical_callback=self.handle_critical_error,
-        )
-        self._build_number_thread = threading.Thread(
-            target=self.build_number_updater.run_forever,
-            daemon=True,
-        )
-        self._build_number_thread.start()
         self.log_entries = []
         self.error_entries = []
         self.max_log_entries = 2000
@@ -328,6 +244,9 @@ class MassDMApp(ctk.CTk):
         self.auto_reply_once_var = ctk.BooleanVar(
             value=self._get_setting_bool("auto_reply_once_per_conversation", False)
         )
+        self.auto_reply_mutation_var = ctk.BooleanVar(
+            value=self._get_setting_bool("auto_reply_mutation", True)
+        )
         self.require_proxy_var = ctk.BooleanVar(value=self._get_setting_bool("require_proxy", True))
         self.profile_change_name_var = ctk.BooleanVar(value=self._get_setting_bool("profile_change_name", False))
         self.profile_change_avatar_var = ctk.BooleanVar(value=self._get_setting_bool("profile_change_avatar", False))
@@ -386,14 +305,9 @@ class MassDMApp(ctk.CTk):
                 self.db.set_setting("main_window_geometry", geometry)
         except Exception:
             pass
-        if hasattr(self, "gateway_manager") and self.gateway_manager:
+        if hasattr(self, "core") and self.core:
             try:
-                self.gateway_manager.stop()
-            except Exception:
-                pass
-        if hasattr(self, "gateway_mp_manager") and self.gateway_mp_manager:
-            try:
-                self.gateway_mp_manager.shutdown()
+                self.core.shutdown()
             except Exception:
                 pass
         self.destroy()
@@ -3025,42 +2939,32 @@ class MassDMApp(ctk.CTk):
         )
         if dry_run:
             self.add_log("[Mission] Dry-run enabled. Messages will not be sent.")
-        accounts = self.db.get_active_accounts("discord")
+        mission_params = {
+            "templates": templates,
+            "dm_delay_min": dm_delay_min,
+            "dm_delay_max": dm_delay_max,
+            "friend_delay_min": friend_delay_min,
+            "friend_delay_max": friend_delay_max,
+            "account_min_interval": account_min_interval,
+            "target_min_interval": target_min_interval,
+            "use_friend_req": use_friend_req,
+            "dry_run": dry_run,
+        }
         def _mission_with_proxy_check():
+            accounts = self.db.get_active_accounts("discord")
             valid_accounts = self._ensure_account_proxies(accounts, "mission")
             if not valid_accounts:
                 return
             allowed_ids = {acc[0] for acc in valid_accounts}
-            self.worker.run_mission(
-                templates,
-                dm_delay_min,
-                dm_delay_max,
-                use_friend_req,
-                friend_delay_min,
-                friend_delay_max,
-                account_min_interval,
-                target_min_interval,
-                dry_run,
-                allowed_ids,
-            )
-        thread = threading.Thread(
-            target=_mission_with_proxy_check,
-        )
-        thread.daemon = True
-        thread.start()
-        self.add_log("[Info] Mission started.")
+            params = dict(mission_params)
+            params["allowed_ids"] = allowed_ids
+            self.core.start_mission(params)
+        threading.Thread(target=_mission_with_proxy_check, daemon=True).start()
 
     def stop_all(self):
         self.add_log("[UI] Stop all requested.")
-        self.worker.stop()
-        self.scraper.stop()
-        self.status_changer.stop()
-        self.joiner.stop()
-        if hasattr(self, "gateway_manager") and self.gateway_manager:
-            try:
-                self.gateway_manager.stop()
-            except Exception:
-                pass
+        if self.core:
+            self.core.stop_all()
         self.add_log("[Debug] Worker stop requested.")
         self.add_log("[Debug] Scraper stop requested.")
         self.add_log("[Debug] Status changer stop requested.")
@@ -4103,6 +4007,19 @@ class MassDMApp(ctk.CTk):
         self.captcha_save_btn.grid(row=2, column=2, padx=10, pady=5)
         self.captcha_test_btn = ctk.CTkButton(self.captcha_frame, text="Test API", fg_color="#16a085", command=self.test_captcha_settings)
         self.captcha_test_btn.grid(row=3, column=1, padx=10, pady=5)
+        ctk.CTkLabel(self.captcha_frame, text="External proxy (Captcha/OpenAI)").grid(
+            row=4,
+            column=0,
+            padx=10,
+            pady=(10, 2),
+            sticky="w",
+        )
+        self.external_proxy_input = ctk.CTkEntry(
+            self.captcha_frame,
+            placeholder_text="Proxy (http://user:pass@ip:port or host:port:user:pass)",
+            width=350,
+        )
+        self.external_proxy_input.grid(row=5, column=0, padx=10, pady=5, columnspan=2, sticky="w")
         self._load_captcha_settings()
 
         self.ai_frame = ctk.CTkFrame(parent)
@@ -4120,28 +4037,34 @@ class MassDMApp(ctk.CTk):
             variable=self.auto_reply_once_var,
         )
         self.auto_reply_once_toggle.grid(row=2, column=0, columnspan=2, padx=10, pady=(0, 8), sticky="w")
-        ctk.CTkLabel(self.ai_frame, text="API Key").grid(row=3, column=0, padx=10, pady=(0, 2), sticky="w")
-        ctk.CTkLabel(self.ai_frame, text="Model").grid(row=3, column=1, padx=10, pady=(0, 2), sticky="w")
+        self.auto_reply_mutation_toggle = ctk.CTkCheckBox(
+            self.ai_frame,
+            text="Enable reply mutations (style/length/emoji)",
+            variable=self.auto_reply_mutation_var,
+        )
+        self.auto_reply_mutation_toggle.grid(row=3, column=0, columnspan=2, padx=10, pady=(0, 8), sticky="w")
+        ctk.CTkLabel(self.ai_frame, text="API Key").grid(row=4, column=0, padx=10, pady=(0, 2), sticky="w")
+        ctk.CTkLabel(self.ai_frame, text="Model").grid(row=4, column=1, padx=10, pady=(0, 2), sticky="w")
         self.openai_key_input = ctk.CTkEntry(self.ai_frame, placeholder_text="OpenAI API Key", width=350)
-        self.openai_key_input.grid(row=4, column=0, padx=10, pady=5, sticky="w")
+        self.openai_key_input.grid(row=5, column=0, padx=10, pady=5, sticky="w")
         self.openai_model_input = ctk.CTkEntry(self.ai_frame, placeholder_text="Model (e.g. gpt-4o-mini)", width=220)
-        self.openai_model_input.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+        self.openai_model_input.grid(row=5, column=1, padx=10, pady=5, sticky="w")
         self.openai_save_btn = ctk.CTkButton(
             self.ai_frame,
             text="Save AI Settings",
             fg_color="#3498db",
             command=self.save_ai_settings,
         )
-        self.openai_save_btn.grid(row=4, column=2, padx=10, pady=5, sticky="w")
-        ctk.CTkLabel(self.ai_frame, text="System prompt").grid(row=5, column=0, padx=10, pady=(0, 2), sticky="w")
+        self.openai_save_btn.grid(row=5, column=2, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.ai_frame, text="System prompt").grid(row=6, column=0, padx=10, pady=(0, 2), sticky="w")
         self.openai_prompt_input = ctk.CTkTextbox(self.ai_frame, height=90, width=600)
-        self.openai_prompt_input.grid(row=6, column=0, columnspan=2, padx=10, pady=5, sticky="w")
+        self.openai_prompt_input.grid(row=7, column=0, columnspan=2, padx=10, pady=5, sticky="w")
         self.ai_hint_label = ctk.CTkLabel(
             self.ai_frame,
             text="Requires an OpenAI API key. Example model: gpt-4o-mini.",
             text_color="#8a8a8a",
         )
-        self.ai_hint_label.grid(row=7, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="w")
+        self.ai_hint_label.grid(row=8, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="w")
         self._load_ai_settings()
 
         self.version_frame = ctk.CTkFrame(parent)
@@ -4319,6 +4242,18 @@ class MassDMApp(ctk.CTk):
         provider = self._normalize_captcha_provider(self.captcha_solver.get_provider())
         self.captcha_provider_var.set(self.captcha_provider_display.get(provider, provider))
         self._refresh_captcha_key()
+        if hasattr(self, "external_proxy_input") and self.external_proxy_input.winfo_exists():
+            raw = (self.db.get_setting("external_proxy", "") or "").strip()
+            normalized = self._normalize_proxy(raw) if raw else ""
+            if raw and not normalized:
+                self._set_input_valid(self.external_proxy_input, False)
+            else:
+                if normalized and normalized != raw:
+                    self.db.set_setting("external_proxy", normalized)
+                self.external_proxy_input.delete(0, "end")
+                if normalized:
+                    self.external_proxy_input.insert(0, normalized)
+                self._set_input_valid(self.external_proxy_input, True)
 
     def _refresh_captcha_key(self):
         provider = self._get_captcha_provider_key()
@@ -4336,6 +4271,22 @@ class MassDMApp(ctk.CTk):
         api_key = self.captcha_key_input.get().strip()
         self.db.set_setting("captcha_provider", provider)
         self.db.set_setting(f"{provider}_api_key", api_key)
+        if hasattr(self, "external_proxy_input") and self.external_proxy_input.winfo_exists():
+            raw = self.external_proxy_input.get().strip()
+            if not raw:
+                self.db.set_setting("external_proxy", None)
+                self._set_input_valid(self.external_proxy_input, True)
+            else:
+                normalized = self._normalize_proxy(raw)
+                if not normalized:
+                    self.log_error("Invalid external proxy format.")
+                    self._set_input_valid(self.external_proxy_input, False)
+                else:
+                    if normalized != raw:
+                        self.external_proxy_input.delete(0, "end")
+                        self.external_proxy_input.insert(0, normalized)
+                    self._set_input_valid(self.external_proxy_input, True)
+                    self.db.set_setting("external_proxy", normalized)
         self.add_log(f"[Captcha] Saved settings for {provider}.")
 
     def save_ai_settings(self):
@@ -4348,6 +4299,7 @@ class MassDMApp(ctk.CTk):
             prompt = self.openai_prompt_input.get("1.0", "end").strip()
         self._set_setting_bool("auto_reply_enabled", self.auto_reply_var.get())
         self._set_setting_bool("auto_reply_once_per_conversation", self.auto_reply_once_var.get())
+        self._set_setting_bool("auto_reply_mutation", self.auto_reply_mutation_var.get())
         self.db.set_setting("openai_api_key", api_key or None)
         self.db.set_setting("openai_model", model or None)
         self.db.set_setting("openai_system_prompt", prompt or None)
@@ -4355,6 +4307,7 @@ class MassDMApp(ctk.CTk):
         self.add_log(
             f"[Debug] AI settings: enabled={self.auto_reply_var.get()}, "
             f"once_per_conversation={self.auto_reply_once_var.get()}, "
+            f"mutations={self.auto_reply_mutation_var.get()}, "
             f"model={model or 'default'}, api_key_set={bool(api_key)}."
         )
         self.add_log(f"[Info] AI settings saved (model={model or 'default'}).")
@@ -4364,6 +4317,9 @@ class MassDMApp(ctk.CTk):
     def _load_ai_settings(self):
         if not hasattr(self, "openai_key_input"):
             return
+        self.auto_reply_var.set(self._get_setting_bool("auto_reply_enabled", False))
+        self.auto_reply_once_var.set(self._get_setting_bool("auto_reply_once_per_conversation", False))
+        self.auto_reply_mutation_var.set(self._get_setting_bool("auto_reply_mutation", True))
         stored_key = self.db.get_setting("openai_api_key", "")
         self.openai_key_input.delete(0, "end")
         if stored_key:

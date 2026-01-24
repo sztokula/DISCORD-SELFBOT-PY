@@ -1,9 +1,11 @@
-﻿import httpx
+import httpx
 import time
 import random
+from datetime import datetime
 from proxy_utils import httpx_client
 from super_properties import set_super_properties_header
 from client_identity import USER_AGENT
+from behavior_version import CURRENT_BEHAVIOR_VERSION, get_behavior_version, seeded_rng
 
 class StatusChanger:
     def __init__(self, db_manager, log_callback, metrics=None, telemetry=None):
@@ -41,6 +43,44 @@ class StatusChanger:
             return float(retry_after)
         except (TypeError, ValueError):
             return default
+
+    def _get_setting_float(self, key, default, min_value=None, max_value=None):
+        try:
+            raw = self.db.get_setting(key, "")
+        except Exception:
+            raw = ""
+        if raw in (None, ""):
+            value = default
+        else:
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                value = default
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+
+    def _recent_profile_change(self, account_id):
+        min_gap = self._get_setting_float("profile_status_min_gap_seconds", 900.0, 0.0, None)
+        if not min_gap:
+            return False, None
+        try:
+            history = self.db.get_profile_history(account_id) or {}
+        except Exception:
+            return False, None
+        updated_at = history.get("updated_at")
+        if not updated_at:
+            return False, None
+        try:
+            updated_dt = datetime.fromisoformat(str(updated_at))
+        except Exception:
+            return False, None
+        elapsed = (datetime.now() - updated_dt).total_seconds()
+        if elapsed < min_gap:
+            return True, min_gap - elapsed
+        return False, None
 
     def _wait_for_rate_limit(self, response, attempt, running_check=None):
         retry_after = self._get_retry_after(response)
@@ -95,6 +135,11 @@ class StatusChanger:
         status_type: 'online', 'idle', 'dnd', 'invisible'
         custom_text: e.g. 'Playing Metin2'
         """
+        recent, remaining = self._recent_profile_change(account_id)
+        if recent:
+            self.log(f"[Status] Skipped account {account_id}: recent profile change ({int(remaining)}s remaining).")
+            return False
+
         url = "https://discord.com/api/v9/users/@me/settings"
         user_agent = USER_AGENT
         headers = {
@@ -132,6 +177,16 @@ class StatusChanger:
                         if response.status_code == 204:
                             self.log("[Status] Status updated (204 No Content).")
                         self.log(f"[Info] Status updated for account {account_id}.")
+                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        try:
+                            self.db.update_profile_history(
+                                account_id,
+                                status_text=custom_text,
+                                status_updated_at=now_str,
+                                updated_at=now_str,
+                            )
+                        except Exception:
+                            pass
                         if self.telemetry:
                             self.telemetry.send_science(
                                 token,
@@ -183,7 +238,11 @@ class StatusChanger:
                 self.log(f"[Status] Account {acc_id} updated.")
             
             # Small delay to avoid sending everything in a single second.
-            self._sleep_with_stop(random.uniform(1.0, 3.0), running_check=running_check)
+            version = get_behavior_version(self.db, token, CURRENT_BEHAVIOR_VERSION)
+            base_rng = seeded_rng(token or "anon", version, "status_delay")
+            scale = base_rng.uniform(0.8, 1.2)
+            delay = random.uniform(1.0 * scale, 3.0 * scale)
+            self._sleep_with_stop(delay, running_check=running_check)
             
         self.log("[Status] Status update finished.")
 

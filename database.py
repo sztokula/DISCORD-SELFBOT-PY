@@ -216,6 +216,13 @@ class DatabaseManager:
                 )
             ''')
             cursor.execute('''
+                CREATE TABLE IF NOT EXISTS token_behavior (
+                    token_hash TEXT PRIMARY KEY,
+                    behavior_version TEXT,
+                    updated_at TIMESTAMP
+                )
+            ''')
+            cursor.execute('''
                 CREATE TABLE IF NOT EXISTS token_violations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     token_hash TEXT,
@@ -223,6 +230,20 @@ class DatabaseManager:
                     severity INTEGER,
                     details TEXT,
                     created_at TIMESTAMP
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS profile_history (
+                    account_id INTEGER PRIMARY KEY,
+                    last_username TEXT,
+                    last_avatar_hash TEXT,
+                    last_bio TEXT,
+                    last_status_text TEXT,
+                    name_updated_at TIMESTAMP,
+                    avatar_updated_at TIMESTAMP,
+                    bio_updated_at TIMESTAMP,
+                    status_updated_at TIMESTAMP,
+                    updated_at TIMESTAMP
                 )
             ''')
             conn.commit()
@@ -713,10 +734,12 @@ class DatabaseManager:
                 token_hash = self._token_hash(token_value)
             cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
             cursor.execute("DELETE FROM last_dm WHERE account_id = ?", (account_id,))
+            cursor.execute("DELETE FROM profile_history WHERE account_id = ?", (account_id,))
             if token_hash:
                 cursor.execute("DELETE FROM token_cookies WHERE token_hash = ?", (token_hash,))
                 cursor.execute("DELETE FROM token_fingerprints WHERE token_hash = ?", (token_hash,))
                 cursor.execute("DELETE FROM token_health WHERE token_hash = ?", (token_hash,))
+                cursor.execute("DELETE FROM token_behavior WHERE token_hash = ?", (token_hash,))
                 cursor.execute("DELETE FROM token_violations WHERE token_hash = ?", (token_hash,))
             conn.commit()
             conn.close()
@@ -898,6 +921,338 @@ class DatabaseManager:
                     updated_at = excluded.updated_at
                 ''',
                 (token_hash, raw, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            )
+            conn.commit()
+            conn.close()
+        self._run_write(_set)
+
+    def get_token_health(self, token):
+        token_hash = self._token_hash(token)
+        if not token_hash:
+            return {
+                "status": "healthy",
+                "score": 0,
+                "cooldown_until": None,
+                "last_event_at": None,
+            }
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT status, score, cooldown_until, last_event_at FROM token_health WHERE token_hash = ?",
+            (token_hash,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return {
+                "status": "healthy",
+                "score": 0,
+                "cooldown_until": None,
+                "last_event_at": None,
+            }
+        status, score, cooldown_until, last_event_at = row
+        return {
+            "status": status or "healthy",
+            "score": int(score or 0),
+            "cooldown_until": cooldown_until,
+            "last_event_at": last_event_at,
+        }
+
+    def set_token_health(self, token, status=None, score=None, cooldown_until=None, last_event_at=None):
+        token_hash = self._token_hash(token)
+        if not token_hash:
+            return
+        current = self.get_token_health(token)
+        status = status if status is not None else current.get("status")
+        score = int(score) if score is not None else int(current.get("score", 0))
+        cooldown_until = cooldown_until if cooldown_until is not None else current.get("cooldown_until")
+        last_event_at = last_event_at if last_event_at is not None else current.get("last_event_at")
+
+        def _set():
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                '''
+                INSERT INTO token_health (token_hash, status, score, cooldown_until, last_event_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(token_hash) DO UPDATE SET
+                    status = excluded.status,
+                    score = excluded.score,
+                    cooldown_until = excluded.cooldown_until,
+                    last_event_at = excluded.last_event_at
+                ''',
+                (token_hash, status, score, cooldown_until, last_event_at),
+            )
+            conn.commit()
+            conn.close()
+        self._run_write(_set)
+
+    def get_profile_history(self, account_id):
+        if not account_id:
+            return {}
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            '''
+            SELECT last_username, last_avatar_hash, last_bio, last_status_text,
+                   name_updated_at, avatar_updated_at, bio_updated_at, status_updated_at, updated_at
+            FROM profile_history
+            WHERE account_id = ?
+            ''',
+            (account_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return {}
+        return {
+            "last_username": row[0],
+            "last_avatar_hash": row[1],
+            "last_bio": row[2],
+            "last_status_text": row[3],
+            "name_updated_at": row[4],
+            "avatar_updated_at": row[5],
+            "bio_updated_at": row[6],
+            "status_updated_at": row[7],
+            "updated_at": row[8],
+        }
+
+    def update_profile_history(
+        self,
+        account_id,
+        *,
+        username=None,
+        avatar_hash=None,
+        bio=None,
+        status_text=None,
+        name_updated_at=None,
+        avatar_updated_at=None,
+        bio_updated_at=None,
+        status_updated_at=None,
+        updated_at=None,
+    ):
+        if not account_id:
+            return
+        def _update():
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                '''
+                SELECT last_username, last_avatar_hash, last_bio, last_status_text,
+                       name_updated_at, avatar_updated_at, bio_updated_at, status_updated_at, updated_at
+                FROM profile_history
+                WHERE account_id = ?
+                ''',
+                (account_id,),
+            )
+            row = cursor.fetchone()
+            current = {
+                "last_username": None,
+                "last_avatar_hash": None,
+                "last_bio": None,
+                "last_status_text": None,
+                "name_updated_at": None,
+                "avatar_updated_at": None,
+                "bio_updated_at": None,
+                "status_updated_at": None,
+                "updated_at": None,
+            }
+            if row:
+                current = {
+                    "last_username": row[0],
+                    "last_avatar_hash": row[1],
+                    "last_bio": row[2],
+                    "last_status_text": row[3],
+                    "name_updated_at": row[4],
+                    "avatar_updated_at": row[5],
+                    "bio_updated_at": row[6],
+                    "status_updated_at": row[7],
+                    "updated_at": row[8],
+                }
+
+            changed = False
+            if username is not None:
+                current["last_username"] = username
+                changed = True
+            if avatar_hash is not None:
+                current["last_avatar_hash"] = avatar_hash
+                changed = True
+            if bio is not None:
+                current["last_bio"] = bio
+                changed = True
+            if status_text is not None:
+                current["last_status_text"] = status_text
+                changed = True
+            if name_updated_at is not None:
+                current["name_updated_at"] = name_updated_at
+                changed = True
+            if avatar_updated_at is not None:
+                current["avatar_updated_at"] = avatar_updated_at
+                changed = True
+            if bio_updated_at is not None:
+                current["bio_updated_at"] = bio_updated_at
+                changed = True
+            if status_updated_at is not None:
+                current["status_updated_at"] = status_updated_at
+                changed = True
+            if updated_at is not None:
+                current["updated_at"] = updated_at
+                changed = True
+
+            if changed and not current["updated_at"]:
+                current["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            cursor.execute(
+                '''
+                INSERT INTO profile_history (
+                    account_id, last_username, last_avatar_hash, last_bio, last_status_text,
+                    name_updated_at, avatar_updated_at, bio_updated_at, status_updated_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(account_id) DO UPDATE SET
+                    last_username = excluded.last_username,
+                    last_avatar_hash = excluded.last_avatar_hash,
+                    last_bio = excluded.last_bio,
+                    last_status_text = excluded.last_status_text,
+                    name_updated_at = excluded.name_updated_at,
+                    avatar_updated_at = excluded.avatar_updated_at,
+                    bio_updated_at = excluded.bio_updated_at,
+                    status_updated_at = excluded.status_updated_at,
+                    updated_at = excluded.updated_at
+                ''',
+                (
+                    account_id,
+                    current["last_username"],
+                    current["last_avatar_hash"],
+                    current["last_bio"],
+                    current["last_status_text"],
+                    current["name_updated_at"],
+                    current["avatar_updated_at"],
+                    current["bio_updated_at"],
+                    current["status_updated_at"],
+                    current["updated_at"],
+                ),
+            )
+            conn.commit()
+            conn.close()
+        self._run_write(_update)
+
+    def record_token_violation(
+        self,
+        token,
+        kind,
+        *,
+        severity=1,
+        status=None,
+        cooldown_seconds=None,
+        details=None,
+    ):
+        token_hash = self._token_hash(token)
+        if not token_hash:
+            return
+        if not kind:
+            kind = "unknown"
+        try:
+            severity_value = int(severity)
+        except (TypeError, ValueError):
+            severity_value = 1
+        severity_value = max(1, min(10, severity_value))
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        def _insert_violation():
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                '''
+                INSERT INTO token_violations (token_hash, kind, severity, details, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ''',
+                (token_hash, kind, severity_value, details, now_str),
+            )
+            conn.commit()
+            conn.close()
+
+        self._run_write(_insert_violation)
+
+        current = self.get_token_health(token)
+        status_order = {"healthy": 0, "suspected": 1, "limited": 2, "cooldowned": 3}
+        desired_status = status
+        if desired_status is None:
+            if kind in {"rate_limited", "http_429"}:
+                desired_status = "cooldowned" if cooldown_seconds else "limited"
+            elif kind in {"captcha", "silent_fail"}:
+                desired_status = "suspected"
+            elif kind in {"forbidden", "partial_lock", "shadowban"}:
+                desired_status = "limited"
+            else:
+                desired_status = "suspected"
+
+        current_status = current.get("status", "healthy")
+        if status_order.get(desired_status, 0) < status_order.get(current_status, 0):
+            desired_status = current_status
+
+        cooldown_until = current.get("cooldown_until")
+        if cooldown_seconds:
+            try:
+                cooldown_seconds = float(cooldown_seconds)
+            except (TypeError, ValueError):
+                cooldown_seconds = None
+        if cooldown_seconds:
+            new_until = (datetime.now() + timedelta(seconds=cooldown_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+            if not cooldown_until or new_until > cooldown_until:
+                cooldown_until = new_until
+
+        score = int(current.get("score", 0)) + severity_value
+        self.set_token_health(
+            token,
+            status=desired_status,
+            score=score,
+            cooldown_until=cooldown_until,
+            last_event_at=now_str,
+        )
+
+    def get_token_behavior_version(self, token, default_version=None):
+        token_hash = self._token_hash(token)
+        if not token_hash:
+            return default_version
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT behavior_version FROM token_behavior WHERE token_hash = ?",
+            (token_hash,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row and row[0]:
+            return row[0]
+        if default_version is not None:
+            self.set_token_behavior_version(token, default_version)
+            return default_version
+        return None
+
+    def set_token_behavior_version(self, token, version):
+        token_hash = self._token_hash(token)
+        if not token_hash:
+            return
+        version_value = str(version) if version is not None else None
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        def _set():
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            if version_value is None:
+                cursor.execute("DELETE FROM token_behavior WHERE token_hash = ?", (token_hash,))
+                conn.commit()
+                conn.close()
+                return
+            cursor.execute(
+                '''
+                INSERT INTO token_behavior (token_hash, behavior_version, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(token_hash) DO UPDATE SET
+                    behavior_version = excluded.behavior_version,
+                    updated_at = excluded.updated_at
+                ''',
+                (token_hash, version_value, now_str),
             )
             conn.commit()
             conn.close()

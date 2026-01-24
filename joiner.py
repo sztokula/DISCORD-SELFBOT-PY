@@ -6,6 +6,7 @@ import uuid
 from super_properties import set_super_properties_header
 from delay_utils import gaussian_delay
 from client_identity import USER_AGENT
+from behavior_version import CURRENT_BEHAVIOR_VERSION, get_behavior_version, seeded_rng
 
 class DiscordJoiner:
     def __init__(self, db_manager, log_callback, captcha_solver=None, metrics=None, telemetry=None):
@@ -20,6 +21,7 @@ class DiscordJoiner:
         self.captcha_retry_base_seconds = 60
         self.captcha_retry_max_seconds = 900
         self.max_captcha_retries = 3
+        self._captcha_defer_overrides = {}
 
     def _record_request(self, duration, response=None):
         if not self.metrics:
@@ -27,6 +29,85 @@ class DiscordJoiner:
         status_code = response.status_code if response is not None else None
         rate_limited = status_code == 429
         self.metrics.record_request(duration, status_code=status_code, rate_limited=rate_limited)
+
+    def _get_setting_float(self, key, default, min_value=None, max_value=None):
+        try:
+            raw = self.db.get_setting(key, "")
+        except Exception:
+            raw = ""
+        if raw in (None, ""):
+            value = default
+        else:
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                value = default
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+
+    def _record_token_violation(self, token, kind, severity=1, status=None, cooldown_seconds=None, details=None):
+        if not token:
+            return
+        try:
+            self.db.record_token_violation(
+                token,
+                kind,
+                severity=severity,
+                status=status,
+                cooldown_seconds=cooldown_seconds,
+                details=details,
+            )
+        except Exception:
+            return
+
+    def _post_captcha_policy(self, token, context):
+        base_postpone = self._get_setting_float("captcha_postpone_rate", 0.25, 0.0, 1.0)
+        base_mute = self._get_setting_float("captcha_mute_rate", 0.1, 0.0, 1.0)
+        version = get_behavior_version(self.db, token, CURRENT_BEHAVIOR_VERSION)
+        rng = seeded_rng(token or "anon", version, f"captcha_policy:{context}")
+        rate_scale = rng.uniform(0.8, 1.2)
+        postpone_rate = max(0.0, min(1.0, base_postpone * rate_scale))
+        mute_rate = max(0.0, min(1.0, base_mute * rate_scale))
+        total = postpone_rate + mute_rate
+        if total <= 0.0:
+            return None
+        if total > 1.0:
+            postpone_rate /= total
+            mute_rate /= total
+        roll = random.random()
+        if roll < mute_rate:
+            action = "muted"
+            base_min = self._get_setting_float("captcha_mute_min_seconds", 900.0, 0.0, None)
+            base_max = self._get_setting_float("captcha_mute_max_seconds", 3600.0, base_min, None)
+            min_delay = max(0.0, base_min * rng.uniform(0.9, 1.1))
+            max_delay = max(min_delay, base_max * rng.uniform(0.9, 1.1))
+        elif roll < mute_rate + postpone_rate:
+            action = "deferred"
+            base_min = self._get_setting_float("captcha_postpone_min_seconds", 30.0, 0.0, None)
+            base_max = self._get_setting_float("captcha_postpone_max_seconds", 180.0, base_min, None)
+            min_delay = max(0.0, base_min * rng.uniform(0.9, 1.1))
+            max_delay = max(min_delay, base_max * rng.uniform(0.9, 1.1))
+        else:
+            return None
+        delay = random.uniform(min_delay, max_delay) if max_delay > min_delay else min_delay
+        if token:
+            self._record_token_violation(
+                token,
+                "captcha",
+                severity=1,
+                status="cooldowned",
+                cooldown_seconds=delay,
+                details=f"{context}_post_captcha_{action}",
+            )
+        return {"action": action, "delay": delay}
+
+    def _consume_captcha_defer_delay(self, acc_id):
+        if acc_id is None:
+            return None
+        return self._captcha_defer_overrides.pop(acc_id, None)
 
     def _get_retry_after(self, response, default=5.0):
         retry_header = response.headers.get("Retry-After")
@@ -158,6 +239,15 @@ class DiscordJoiner:
                                 pass
                         captcha_payload, err, user_agent = self._solve_captcha_payload(response)
                         if captcha_payload:
+                            policy = self._post_captcha_policy(token, "join_server")
+                            if policy:
+                                delay = policy["delay"]
+                                self._captcha_defer_overrides[acc_id] = delay
+                                self.log(
+                                    f"[Captcha] Post-captcha {policy['action']} for account {acc_id}: "
+                                    f"{int(delay)}s ({invite_code})."
+                                )
+                                return False, f"Captcha {policy['action']} ({int(delay)}s)", None
                             if user_agent:
                                 client.headers["User-Agent"] = user_agent
                                 set_super_properties_header(client.headers, self.db, user_agent=user_agent)
@@ -278,6 +368,7 @@ class DiscordJoiner:
                     self.log(f"[Joiner] Account {acc_id}: JOINED ({invite_code}).")
             else:
                 if self._is_captcha_error(msg):
+                    delay_override = self._consume_captcha_defer_delay(acc_id)
                     self._schedule_join_retry(
                         pending_retries,
                         acc_id,
@@ -286,6 +377,7 @@ class DiscordJoiner:
                         invite_code,
                         0,
                         msg,
+                        delay_override=delay_override,
                     )
                 else:
                     self.log(f"[Joiner] Account {acc_id}: ERROR ({msg}) [{invite_code}]")
@@ -330,6 +422,7 @@ class DiscordJoiner:
                     self.log(f"[Joiner] Account {acc_id}: JOINED ({task['invite_code']}).")
             else:
                 if self._is_captcha_error(msg) and task["attempt"] < self.max_captcha_retries:
+                    delay_override = self._consume_captcha_defer_delay(acc_id)
                     self._schedule_join_retry(
                         pending_retries,
                         acc_id,
@@ -338,6 +431,7 @@ class DiscordJoiner:
                         task["invite_code"],
                         task["attempt"],
                         msg,
+                        delay_override=delay_override,
                     )
                 else:
                     self.log(f"[Joiner] Account {acc_id}: ERROR ({msg}) [{task['invite_code']}]")
@@ -490,11 +584,20 @@ class DiscordJoiner:
         lowered = (message or "").lower()
         return "captcha" in lowered and "phone" not in lowered
 
-    def _schedule_join_retry(self, pending_retries, acc_id, token, proxy, invite_code, attempt, error_msg):
+    def _schedule_join_retry(self, pending_retries, acc_id, token, proxy, invite_code, attempt, error_msg, delay_override=None):
         if attempt >= self.max_captcha_retries:
             self.log(f"[Captcha] Account {acc_id}: max retries reached ({invite_code}).")
             return
-        delay = min(self.captcha_retry_max_seconds, self.captcha_retry_base_seconds * (2 ** attempt))
+        if delay_override is not None:
+            try:
+                delay = float(delay_override)
+            except (TypeError, ValueError):
+                delay = None
+        else:
+            delay = None
+        if delay is None:
+            delay = min(self.captcha_retry_max_seconds, self.captcha_retry_base_seconds * (2 ** attempt))
+        delay = max(1.0, delay)
         pending_retries.append(
             {
                 "acc_id": acc_id,
@@ -565,6 +668,12 @@ class DiscordJoiner:
                 if not captcha_payload:
                     self.log(f"[Captcha] Failed: {err}")
                     self.log(f"[Error] Captcha payload unavailable: {err}")
+                    return False
+                token = client.headers.get("Authorization")
+                policy = self._post_captcha_policy(token, "post_join")
+                if policy:
+                    delay = policy["delay"]
+                    self.log(f"[Captcha] Post-captcha {policy['action']} ({int(delay)}s) on {url}.")
                     return False
                 if user_agent:
                     client.headers["User-Agent"] = user_agent

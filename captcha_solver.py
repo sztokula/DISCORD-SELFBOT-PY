@@ -2,7 +2,7 @@ import time
 from typing import Optional, Tuple
 
 import httpx
-from proxy_utils import httpx_client
+from proxy_utils import httpx_client, load_external_proxy, resolve_proxy_for_traffic
 
 
 class CaptchaSolver:
@@ -24,12 +24,14 @@ class CaptchaSolver:
         return self.PROVIDER_ALIASES.get(normalized, provider)
 
     def _post_json(self, url, *, timeout, **kwargs):
-        with httpx_client(timeout=timeout) as client:
+        proxy = resolve_proxy_for_traffic("external", external_proxy=load_external_proxy(self.db))
+        with httpx_client(proxy or None, timeout=timeout) as client:
             response = client.post(url, **kwargs)
             return response.json()
 
     def _get_json(self, url, *, timeout, **kwargs):
-        with httpx_client(timeout=timeout) as client:
+        proxy = resolve_proxy_for_traffic("external", external_proxy=load_external_proxy(self.db))
+        with httpx_client(proxy or None, timeout=timeout) as client:
             response = client.get(url, **kwargs)
             return response.json()
 

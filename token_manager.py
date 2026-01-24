@@ -68,6 +68,25 @@ class TokenManager:
             return DEFAULT_PROXY_CHECK_ENDPOINT
         return raw
 
+    def _get_retry_after(self, response, default=5.0):
+        retry_header = response.headers.get("Retry-After")
+        if retry_header:
+            try:
+                return float(retry_header)
+            except ValueError:
+                pass
+        try:
+            data = response.json()
+        except Exception:
+            return default
+        retry_after = data.get("retry_after")
+        if retry_after is None:
+            return default
+        try:
+            return float(retry_after)
+        except (TypeError, ValueError):
+            return default
+
     def _fetch_token_info(self, token, proxy=None):
         if self._is_proxy_required() and not proxy:
             return "retry", "Proxy is required."
@@ -109,6 +128,17 @@ class TokenManager:
             username = data.get("username")
             discriminator = data.get("discriminator")
             if not username or discriminator is None:
+                try:
+                    self.db.record_token_violation(
+                        token,
+                        "silent_fail",
+                        severity=1,
+                        status="suspected",
+                        cooldown_seconds=60,
+                        details="missing_username_discriminator",
+                    )
+                except Exception:
+                    pass
                 return "retry", "Invalid response"
             if self.telemetry:
                 self.telemetry.send_science(
@@ -125,8 +155,31 @@ class TokenManager:
             except Exception:
                 pass
             if response.status_code == 403:
+                try:
+                    self.db.record_token_violation(
+                        token,
+                        "forbidden",
+                        severity=2,
+                        status="limited",
+                        cooldown_seconds=300,
+                    )
+                except Exception:
+                    pass
                 return "retry", "Forbidden"
             return "unauthorized", "Invalid Token"
+        if response.status_code == 429:
+            retry_after = self._get_retry_after(response, default=30.0)
+            try:
+                self.db.record_token_violation(
+                    token,
+                    "rate_limited",
+                    severity=2,
+                    status="cooldowned",
+                    cooldown_seconds=retry_after,
+                )
+            except Exception:
+                pass
+            return "retry", f"HTTP {response.status_code}"
         return "retry", f"HTTP {response.status_code}"
 
     def validate_token(self, token, proxy=None):

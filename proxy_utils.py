@@ -9,6 +9,35 @@ except Exception:  # pragma: no cover - optional dependency for timeout conversi
     _httpx = None
 
 VALID_PROXY_SCHEMES = {"http", "https", "socks5"}
+TRAFFIC_WS = "ws"
+TRAFFIC_REST = "rest"
+TRAFFIC_EXTERNAL = "external"
+
+
+def load_external_proxy(db, default_scheme="http"):
+    if not db:
+        return None
+    try:
+        raw = db.get_setting("external_proxy", "")
+    except Exception:
+        raw = ""
+    normalized = normalize_proxy(raw, default_scheme=default_scheme) if raw else ""
+    return normalized or None
+
+
+def resolve_proxy_for_traffic(
+    traffic,
+    *,
+    discord_proxy=None,
+    external_proxy=None,
+    default_scheme="http",
+):
+    key = (traffic or "").strip().lower()
+    if key in {"external", "ext", "captcha", "openai"}:
+        return normalize_proxy(external_proxy, default_scheme=default_scheme) or ""
+    if key in {"ws", "gateway", "rest", "discord"}:
+        return normalize_proxy(discord_proxy, default_scheme=default_scheme) or ""
+    return normalize_proxy(discord_proxy or external_proxy, default_scheme=default_scheme) or ""
 
 
 def _build_proxy_url(scheme, host, port, username=None, password=None):

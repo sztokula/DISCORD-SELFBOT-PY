@@ -8,6 +8,7 @@ from proxy_utils import httpx_client
 from super_properties import set_super_properties_header
 from delay_utils import gaussian_delay, DelayController
 from client_identity import USER_AGENT
+from behavior_version import CURRENT_BEHAVIOR_VERSION, get_behavior_version, seeded_rng
 
 class DiscordWorker:
     def __init__(self, db_manager, log_callback, metrics=None, captcha_solver=None, telemetry=None, gateway_manager=None):
@@ -29,6 +30,7 @@ class DiscordWorker:
         self.captcha_retry_max_seconds = 900
         self.max_captcha_retries = 3
         self.dm_warmup_hours = self._get_dm_warmup_hours()
+        self._last_action_at = time.monotonic()
 
     def _get_dm_warmup_hours(self):
         try:
@@ -75,11 +77,92 @@ class DiscordWorker:
             pass
 
     def _record_request(self, duration, response=None):
+        self._last_action_at = time.monotonic()
         if not self.metrics:
             return
         status_code = response.status_code if response is not None else None
         rate_limited = status_code == 429
         self.metrics.record_request(duration, status_code=status_code, rate_limited=rate_limited)
+
+    def reset_heartbeat(self):
+        self._last_action_at = time.monotonic()
+
+    def get_last_action_age(self):
+        return time.monotonic() - self._last_action_at
+
+    def _record_token_violation(self, token, kind, severity=1, status=None, cooldown_seconds=None, details=None):
+        if not token:
+            return
+        try:
+            self.db.record_token_violation(
+                token,
+                kind,
+                severity=severity,
+                status=status,
+                cooldown_seconds=cooldown_seconds,
+                details=details,
+            )
+        except Exception:
+            return
+
+    def _get_setting_float(self, key, default, min_value=None, max_value=None):
+        try:
+            raw = self.db.get_setting(key, "")
+        except Exception:
+            raw = ""
+        if raw in (None, ""):
+            value = default
+        else:
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                value = default
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+
+    def _post_captcha_policy(self, token, context):
+        base_postpone = self._get_setting_float("captcha_postpone_rate", 0.25, 0.0, 1.0)
+        base_mute = self._get_setting_float("captcha_mute_rate", 0.1, 0.0, 1.0)
+        version = get_behavior_version(self.db, token, CURRENT_BEHAVIOR_VERSION)
+        rng = seeded_rng(token or "anon", version, f"captcha_policy:{context}")
+        rate_scale = rng.uniform(0.8, 1.2)
+        postpone_rate = max(0.0, min(1.0, base_postpone * rate_scale))
+        mute_rate = max(0.0, min(1.0, base_mute * rate_scale))
+        total = postpone_rate + mute_rate
+        if total <= 0.0:
+            return None
+        if total > 1.0:
+            postpone_rate /= total
+            mute_rate /= total
+        roll = random.random()
+        if roll < mute_rate:
+            action = "muted"
+            base_min = self._get_setting_float("captcha_mute_min_seconds", 900.0, 0.0, None)
+            base_max = self._get_setting_float("captcha_mute_max_seconds", 3600.0, base_min, None)
+            min_delay = max(0.0, base_min * rng.uniform(0.9, 1.1))
+            max_delay = max(min_delay, base_max * rng.uniform(0.9, 1.1))
+        elif roll < mute_rate + postpone_rate:
+            action = "deferred"
+            base_min = self._get_setting_float("captcha_postpone_min_seconds", 30.0, 0.0, None)
+            base_max = self._get_setting_float("captcha_postpone_max_seconds", 180.0, base_min, None)
+            min_delay = max(0.0, base_min * rng.uniform(0.9, 1.1))
+            max_delay = max(min_delay, base_max * rng.uniform(0.9, 1.1))
+        else:
+            return None
+        delay = random.uniform(min_delay, max_delay) if max_delay > min_delay else min_delay
+        if token:
+            self._record_token_violation(
+                token,
+                "captcha",
+                severity=1,
+                status="cooldowned",
+                cooldown_seconds=delay,
+                details=f"{context}_post_captcha_{action}",
+            )
+        return {"action": action, "delay": delay}
 
     def parse_spintax(self, text):
         """Replace {option1|option2} with a random option."""
@@ -164,6 +247,15 @@ class DiscordWorker:
                 self.log(f"[Info] Friend request sent: user_id={user_id}.")
                 return True
             if resp.status_code == 429:
+                token = client.headers.get("Authorization")
+                self._record_token_violation(
+                    token,
+                    "rate_limited",
+                    severity=2,
+                    status="cooldowned",
+                    cooldown_seconds=self._get_retry_after(resp, default=30.0),
+                    details="friend_request",
+                )
                 self._wait_for_rate_limit(resp, attempt)
                 continue
             if resp.status_code in {400, 403}:
@@ -172,6 +264,20 @@ class DiscordWorker:
                 captcha_payload, err, user_agent = self._solve_captcha_payload(resp)
                 if not captcha_payload:
                     self.log(f"[Captcha] Friend request blocked for {user_id}: {err}")
+                    return False
+                token = client.headers.get("Authorization")
+                self._record_token_violation(
+                    token,
+                    "captcha",
+                    severity=1,
+                    status="suspected",
+                    cooldown_seconds=60,
+                    details="friend_request",
+                )
+                policy = self._post_captcha_policy(token, "friend_request")
+                if policy:
+                    delay = policy["delay"]
+                    self.log(f"[Captcha] Post-captcha {policy['action']} for friend request: {int(delay)}s.")
                     return False
                 if user_agent:
                     client.headers["User-Agent"] = user_agent
@@ -473,6 +579,14 @@ class DiscordWorker:
                         channel_id = response.json().get("id")
                         break
                     if response.status_code == 429:
+                        self._record_token_violation(
+                            token,
+                            "rate_limited",
+                            severity=2,
+                            status="cooldowned",
+                            cooldown_seconds=self._get_retry_after(response, default=30.0),
+                            details="dm_channel_create",
+                        )
                         self._wait_for_rate_limit(response, attempt)
                         continue
                     if response.status_code in {400, 403}:
@@ -481,6 +595,19 @@ class DiscordWorker:
                         captcha_payload, err, user_agent = self._solve_captcha_payload(response)
                         if not captcha_payload:
                             return False, err
+                        self._record_token_violation(
+                            token,
+                            "captcha",
+                            severity=1,
+                            status="suspected",
+                            cooldown_seconds=60,
+                            details="dm_channel_create",
+                        )
+                        policy = self._post_captcha_policy(token, "dm_channel_create")
+                        if policy:
+                            delay = policy["delay"]
+                            self.log(f"[Captcha] Post-captcha {policy['action']} on DM channel: {int(delay)}s.")
+                            return False, f"Captcha {policy['action']} ({int(delay)}s)"
                         if user_agent:
                             client.headers["User-Agent"] = user_agent
                             set_super_properties_header(client.headers, self.db, user_agent=user_agent, proxy=proxy)
@@ -497,6 +624,14 @@ class DiscordWorker:
                             channel_id = retry_resp.json().get("id")
                             break
                         if retry_resp.status_code == 429:
+                            self._record_token_violation(
+                                token,
+                                "rate_limited",
+                                severity=2,
+                                status="cooldowned",
+                                cooldown_seconds=self._get_retry_after(retry_resp, default=30.0),
+                                details="dm_channel_create_captcha",
+                            )
                             self._wait_for_rate_limit(retry_resp, attempt)
                             continue
                         return False, f"Channel captcha error: {retry_resp.status_code}"
@@ -545,6 +680,15 @@ class DiscordWorker:
                             msg_id = None
                         if msg_id:
                             self._post_ack(client, channel_id=channel_id, message_id=msg_id)
+                        else:
+                            self._record_token_violation(
+                                token,
+                                "silent_fail",
+                                severity=1,
+                                status="suspected",
+                                cooldown_seconds=60,
+                                details="dm_message_no_id",
+                            )
                         if self.telemetry:
                             self.telemetry.send_science(
                                 token,
@@ -557,6 +701,14 @@ class DiscordWorker:
                         self.log(f"[Info] DM sent: user_id={user_id}.")
                         return True, "Success"
                     if msg_resp.status_code == 429:
+                        self._record_token_violation(
+                            token,
+                            "rate_limited",
+                            severity=2,
+                            status="cooldowned",
+                            cooldown_seconds=self._get_retry_after(msg_resp, default=30.0),
+                            details="dm_message",
+                        )
                         self._wait_for_rate_limit(msg_resp, attempt)
                         continue
                     if msg_resp.status_code in {400, 403}:
@@ -565,6 +717,19 @@ class DiscordWorker:
                         captcha_payload, err, user_agent = self._solve_captcha_payload(msg_resp)
                         if not captcha_payload:
                             return False, err
+                        self._record_token_violation(
+                            token,
+                            "captcha",
+                            severity=1,
+                            status="suspected",
+                            cooldown_seconds=60,
+                            details="dm_message",
+                        )
+                        policy = self._post_captcha_policy(token, "dm_message")
+                        if policy:
+                            delay = policy["delay"]
+                            self.log(f"[Captcha] Post-captcha {policy['action']} on DM send: {int(delay)}s.")
+                            return False, f"Captcha {policy['action']} ({int(delay)}s)"
                         if user_agent:
                             client.headers["User-Agent"] = user_agent
                             set_super_properties_header(client.headers, self.db, user_agent=user_agent, proxy=proxy)
@@ -585,6 +750,15 @@ class DiscordWorker:
                                 msg_id = None
                             if msg_id:
                                 self._post_ack(client, channel_id=channel_id, message_id=msg_id)
+                            else:
+                                self._record_token_violation(
+                                    token,
+                                    "silent_fail",
+                                    severity=1,
+                                    status="suspected",
+                                    cooldown_seconds=60,
+                                    details="dm_message_captcha_no_id",
+                                )
                             if self.telemetry:
                                 self.telemetry.send_science(
                                     token,
@@ -596,6 +770,14 @@ class DiscordWorker:
                             self.log(f"[Info] DM sent (captcha): user_id={user_id}.")
                             return True, "Success"
                         if retry_resp.status_code == 429:
+                            self._record_token_violation(
+                                token,
+                                "rate_limited",
+                                severity=2,
+                                status="cooldowned",
+                                cooldown_seconds=self._get_retry_after(retry_resp, default=30.0),
+                                details="dm_message_captcha",
+                            )
                             self._wait_for_rate_limit(retry_resp, attempt)
                             continue
                         return False, f"Captcha error: {retry_resp.status_code}"
@@ -669,10 +851,27 @@ class DiscordWorker:
                             msg_id = None
                         if msg_id:
                             self._post_ack(client, channel_id=channel_id, message_id=msg_id)
+                        else:
+                            self._record_token_violation(
+                                token,
+                                "silent_fail",
+                                severity=1,
+                                status="suspected",
+                                cooldown_seconds=60,
+                                details="channel_message_no_id",
+                            )
                         self.log(f"[Debug] Channel message sent: channel_id={channel_id}.")
                         self.log(f"[Info] Channel message sent: channel_id={channel_id}.")
                         return True, "Success"
                     if msg_resp.status_code == 429:
+                        self._record_token_violation(
+                            token,
+                            "rate_limited",
+                            severity=2,
+                            status="cooldowned",
+                            cooldown_seconds=self._get_retry_after(msg_resp, default=30.0),
+                            details="channel_message",
+                        )
                         self._wait_for_rate_limit(msg_resp, attempt)
                         continue
                     if msg_resp.status_code in {400, 403}:
@@ -681,6 +880,19 @@ class DiscordWorker:
                         captcha_payload, err, user_agent = self._solve_captcha_payload(msg_resp)
                         if not captcha_payload:
                             return False, err
+                        self._record_token_violation(
+                            token,
+                            "captcha",
+                            severity=1,
+                            status="suspected",
+                            cooldown_seconds=60,
+                            details="channel_message",
+                        )
+                        policy = self._post_captcha_policy(token, "channel_message")
+                        if policy:
+                            delay = policy["delay"]
+                            self.log(f"[Captcha] Post-captcha {policy['action']} on channel message: {int(delay)}s.")
+                            return False, f"Captcha {policy['action']} ({int(delay)}s)"
                         if user_agent:
                             client.headers["User-Agent"] = user_agent
                             set_super_properties_header(client.headers, self.db, user_agent=user_agent, proxy=proxy)
@@ -703,6 +915,15 @@ class DiscordWorker:
                                 msg_id = None
                         if msg_id:
                             self._post_ack(client, channel_id=channel_id, message_id=msg_id)
+                        else:
+                            self._record_token_violation(
+                                token,
+                                "silent_fail",
+                                severity=1,
+                                status="suspected",
+                                cooldown_seconds=60,
+                                details="channel_message_captcha_no_id",
+                            )
                         self.log(f"[Debug] Channel message sent (captcha): channel_id={channel_id}.")
                         self.log(f"[Info] Channel message sent (captcha): channel_id={channel_id}.")
                         return True, "Success (captcha)"
@@ -754,6 +975,39 @@ class DiscordWorker:
                 allowed_set = set(allowed_account_ids)
                 accounts = [acc for acc in accounts if acc[0] in allowed_set]
             if not accounts: break
+
+            now = datetime.now()
+            prioritized = []
+            for acc in accounts:
+                acc_id, _, token, proxy, _, limit, sent_today, _, _, _, _ = acc
+                health = self.db.get_token_health(token)
+                status = health.get("status", "healthy")
+                cooldown_until = health.get("cooldown_until")
+                cooldown_remaining = 0.0
+                if cooldown_until:
+                    try:
+                        cooldown_dt = datetime.fromisoformat(str(cooldown_until))
+                        cooldown_remaining = max(0.0, (cooldown_dt - now).total_seconds())
+                    except Exception:
+                        cooldown_remaining = 0.0
+                if cooldown_remaining > 0:
+                    self.log(f"[Mission] Account {acc_id}: cooldown {cooldown_remaining:.0f}s.")
+                    continue
+                if status == "cooldowned":
+                    try:
+                        self.db.set_token_health(token, status="limited")
+                        status = "limited"
+                    except Exception:
+                        pass
+                prioritized.append((acc, status, health.get("score", 0)))
+
+            status_rank = {"healthy": 0, "suspected": 1, "limited": 2, "cooldowned": 3}
+            prioritized.sort(key=lambda item: (status_rank.get(item[1], 9), item[2], item[0][0]))
+            accounts = [item[0] for item in prioritized]
+            if not accounts:
+                self.log("[Mission] All accounts cooling down. Sleeping before next attempt.")
+                self._sleep_with_stop(5)
+                continue
 
             did_send_attempt = False
             for acc in accounts:

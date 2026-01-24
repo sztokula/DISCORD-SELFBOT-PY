@@ -179,7 +179,7 @@ class AutoReplyService:
             if not token or not channel_id or not content:
                 continue
             context = f"ch:{str(channel_id)[-6:]}"
-            reply = self.responder.generate_reply(content, author_name=author_name)
+            reply = self.responder.generate_reply(content, author_name=author_name, token=token)
             if not reply:
                 self._log(f"[AI] Reply generation failed ({context}).")
                 continue
