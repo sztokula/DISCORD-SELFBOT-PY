@@ -161,8 +161,10 @@ class AutoReplyService:
             author_name = item.get("author_name")
             if not token or not channel_id or not content:
                 continue
+            context = f"ch:{str(channel_id)[-6:]}"
             reply = self.responder.generate_reply(content, author_name=author_name)
             if not reply:
+                self._log(f"[AI] Reply generation failed ({context}).")
                 continue
             meta = self._get_token_meta(token) or {}
             account_id = meta.get("account_id")
@@ -175,4 +177,4 @@ class AutoReplyService:
                 proxy=proxy,
             )
             if not ok:
-                self._log(f"[AI] Auto-reply failed: {info}")
+                self._log(f"[AI] Auto-reply failed ({context}): {info}")

@@ -132,6 +132,13 @@ class MassDMApp(ctk.CTk):
         self.notification_var = ctk.StringVar(value="Notifications: --")
         self.build_number_var = ctk.StringVar(value="Discord build: --")
 
+        stored_geometry = self.db.get_setting("main_window_geometry", "")
+        if stored_geometry:
+            try:
+                self.geometry(stored_geometry)
+            except Exception:
+                pass
+
         # --- SIDEBAR ---
         self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
@@ -139,6 +146,8 @@ class MassDMApp(ctk.CTk):
         self.logo.grid(row=0, column=0, padx=20, pady=30)
         self.btn_settings = ctk.CTkButton(self.sidebar, text="Open Settings", command=self.open_settings_window)
         self.btn_settings.grid(row=1, column=0, padx=20, pady=10)
+        self.btn_logs = ctk.CTkButton(self.sidebar, text="Logs", command=self.open_logs_window)
+        self.btn_logs.grid(row=2, column=0, padx=20, pady=10)
 
         # --- MAIN CONTENT AREA ---
         self.main_container = ctk.CTkFrame(self, fg_color="transparent")
@@ -237,59 +246,12 @@ class MassDMApp(ctk.CTk):
         self.settings_loaded = False
         self.workflow_stage = "setup"
 
-        # 2. LOGS SECTION
-        self.log_frame = ctk.CTkFrame(self.main_container)
-        self.log_frame.pack(fill="both", expand=True, pady=10)
-        self.log_controls = ctk.CTkFrame(self.log_frame, fg_color="transparent")
-        self.log_controls.pack(fill="x", padx=10, pady=(10, 0))
-        ctk.CTkLabel(self.log_controls, text="Type:", text_color="#b0b0b0").pack(side="left")
-        self.log_level_menu = ctk.CTkOptionMenu(
-            self.log_controls,
-            values=["All", "Error", "Warning", "Info"],
-            variable=self.log_level_var,
-        )
-        self.log_level_menu.pack(side="left", padx=(5, 15))
-        self.log_level_var.trace_add("write", self.apply_log_filter)
-        ctk.CTkLabel(self.log_controls, text="Log filter:", text_color="#b0b0b0").pack(side="left")
-        self.log_filter_input = ctk.CTkEntry(
-            self.log_controls,
-            textvariable=self.log_filter_var,
-            placeholder_text="Type to filter logs...",
-        )
-        self.log_filter_input.pack(side="left", padx=10, fill="x", expand=True)
-        self.log_filter_var.trace_add("write", self.apply_log_filter)
-        self.log_file_label = ctk.CTkLabel(
-            self.log_frame,
-            text=f"Log file: {self.log_file_path}",
-            text_color="#8a8a8a",
-            anchor="w",
-        )
-        self.log_file_label.pack(fill="x", padx=10, pady=(5, 0))
-        self.log_tabs = ctk.CTkTabview(self.log_frame)
-        self.log_tabs.pack(fill="both", expand=True, padx=10, pady=10)
-        self.logs_tab = self.log_tabs.add("Logs")
-        self.errors_tab = self.log_tabs.add("Errors")
-        self.log_box = ctk.CTkTextbox(self.logs_tab, height=200, fg_color="#1a1a1a")
-        self.log_box.pack(fill="both", expand=True, padx=10, pady=10)
-        self.error_controls = ctk.CTkFrame(self.errors_tab, fg_color="transparent")
-        self.error_controls.pack(fill="x", padx=10, pady=(10, 0))
-        ctk.CTkLabel(self.error_controls, text="Error filter:", text_color="#b0b0b0").pack(side="left")
-        self.error_filter_input = ctk.CTkEntry(
-            self.error_controls,
-            textvariable=self.error_filter_var,
-            placeholder_text="Type to filter errors...",
-        )
-        self.error_filter_input.pack(side="left", padx=10, fill="x", expand=True)
-        self.error_filter_var.trace_add("write", self.apply_error_filter)
-        self.error_file_label = ctk.CTkLabel(
-            self.errors_tab,
-            text=f"Error log file: {self.error_log_file_path}",
-            text_color="#8a8a8a",
-            anchor="w",
-        )
-        self.error_file_label.pack(fill="x", padx=10, pady=(5, 0))
-        self.error_box = ctk.CTkTextbox(self.errors_tab, height=200, fg_color="#1a1a1a")
-        self.error_box.pack(fill="both", expand=True, padx=10, pady=10)
+        # 2. LOGS WINDOW
+        self.log_window = None
+        self.log_container = None
+        self.log_box = None
+        self.error_box = None
+        self.open_logs_window()
 
         # --- BOTTOM CONTROL BAR ---
         self.control_bar = ctk.CTkFrame(self, height=80)
@@ -309,6 +271,7 @@ class MassDMApp(ctk.CTk):
             "dead": "#e74c3c",
             "banned/dead": "#e74c3c",
         }
+        self.protocol("WM_DELETE_WINDOW", self._on_main_close)
 
     def _run_gateway_manager(self):
         import asyncio
@@ -316,6 +279,15 @@ class MassDMApp(ctk.CTk):
             asyncio.run(self.gateway_manager.run())
         except Exception as exc:
             self.add_log(f"[Gateway] Manager error: {exc}")
+
+    def _on_main_close(self):
+        try:
+            geometry = self.geometry()
+            if geometry:
+                self.db.set_setting("main_window_geometry", geometry)
+        except Exception:
+            pass
+        self.destroy()
 
     def _handle_gateway_event(self, token, payload):
         if hasattr(self, "auto_reply_service") and self.auto_reply_service:
@@ -825,6 +797,7 @@ class MassDMApp(ctk.CTk):
         self._refresh_template_counters()
 
     def save_scrape_settings(self):
+        self.add_log("[UI] Save scrape settings requested.")
         token = None
         if hasattr(self, "token_input") and self.token_input.winfo_exists():
             token = self.token_input.get().strip()
@@ -905,6 +878,7 @@ class MassDMApp(ctk.CTk):
         status_type = self.status_type_var.get().strip()
         self.db.set_setting("status_text", status_text or None)
         self.db.set_setting("status_type", status_type or None)
+        self.add_log("[Status] Saved status settings.")
 
     def save_profile_settings(self):
         if not hasattr(self, "profile_name_input"):
@@ -946,6 +920,7 @@ class MassDMApp(ctk.CTk):
             self._set_input_valid(self.profile_avatar_input, True)
 
     def apply_profile_settings(self):
+        self.add_log("[UI] Apply profile settings requested.")
         self.save_profile_settings()
         change_name = self.profile_change_name_var.get()
         change_avatar = self.profile_change_avatar_var.get()
@@ -1256,6 +1231,7 @@ class MassDMApp(ctk.CTk):
         self.after(1000, self.refresh_health_metrics)
 
     def save_version_settings(self):
+        self.add_log("[UI] Save version settings requested.")
         endpoint_entry = None
         if hasattr(self, "version_endpoint_input") and self.version_endpoint_input.winfo_exists():
             endpoint_entry = self.version_endpoint_input
@@ -1274,6 +1250,7 @@ class MassDMApp(ctk.CTk):
             self.add_log("[Settings] Removed version endpoint.")
 
     def check_for_updates(self):
+        self.add_log("[UI] Check for updates requested.")
         endpoint_entry = None
         if hasattr(self, "version_endpoint_input") and self.version_endpoint_input.winfo_exists():
             endpoint_entry = self.version_endpoint_input
@@ -1298,6 +1275,7 @@ class MassDMApp(ctk.CTk):
         ).start()
 
     def manual_update_with_prompt(self):
+        self.add_log("[UI] Manual update requested.")
         self.manual_update_requested = True
         self.check_for_updates()
 
@@ -1411,6 +1389,7 @@ class MassDMApp(ctk.CTk):
         threading.Thread(target=worker, daemon=True).start()
 
     def download_update(self):
+        self.add_log("[UI] Download update requested.")
         endpoint_entry = None
         if hasattr(self, "version_endpoint_input") and self.version_endpoint_input.winfo_exists():
             endpoint_entry = self.version_endpoint_input
@@ -1690,10 +1669,24 @@ class MassDMApp(ctk.CTk):
         self.after(100, self.process_log_queue)
 
     def _append_log_entry(self, entry):
+        if not self.log_box:
+            return
+        try:
+            if not self.log_box.winfo_exists():
+                return
+        except Exception:
+            return
         self.log_box.insert("end", f"[{entry['timestamp']}] {entry['message']}\n")
         self.log_box.see("end")
 
     def _append_error_entry(self, entry):
+        if not self.error_box:
+            return
+        try:
+            if not self.error_box.winfo_exists():
+                return
+        except Exception:
+            return
         self.error_box.insert("end", f"[{entry['timestamp']}] {entry['message']}\n")
         self.error_box.see("end")
 
@@ -1707,6 +1700,8 @@ class MassDMApp(ctk.CTk):
             return "Error"
         if lowered.startswith("[warn]") or lowered.startswith("[warning]") or lowered.startswith("warning:"):
             return "Warning"
+        if lowered.startswith("[debug]") or lowered.startswith("[ui]"):
+            return "Debug"
         return "Info"
 
     def _matches_log_filter(self, entry):
@@ -1720,6 +1715,13 @@ class MassDMApp(ctk.CTk):
         return filter_text in entry["message"].lower() or filter_text in entry["timestamp"].lower()
 
     def apply_log_filter(self, *_args):
+        if not self.log_box:
+            return
+        try:
+            if not self.log_box.winfo_exists():
+                return
+        except Exception:
+            return
         self.log_box.delete("1.0", "end")
         for entry in self.log_entries:
             if self._matches_log_filter(entry):
@@ -1732,6 +1734,13 @@ class MassDMApp(ctk.CTk):
         return filter_text in entry["message"].lower() or filter_text in entry["timestamp"].lower()
 
     def apply_error_filter(self, *_args):
+        if not self.error_box:
+            return
+        try:
+            if not self.error_box.winfo_exists():
+                return
+        except Exception:
+            return
         self.error_box.delete("1.0", "end")
         for entry in self.error_entries:
             if self._matches_error_filter(entry):
@@ -1752,6 +1761,7 @@ class MassDMApp(ctk.CTk):
             pass
 
     def add_account(self):
+        self.add_log("[UI] Add account requested.")
         token = self.token_input.get().strip()
         proxy = self.proxy_input.get().strip()
         dm_limit_raw = self.dm_limit_input.get().strip()
@@ -1909,6 +1919,7 @@ class MassDMApp(ctk.CTk):
         return assign_count, unused, len(missing_ids) - assign_count
 
     def import_tokens_from_file(self):
+        self.add_log("[UI] Import tokens from file requested.")
         file_path = filedialog.askopenfilename(
             title="Select a .txt file with tokens",
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
@@ -1940,6 +1951,7 @@ class MassDMApp(ctk.CTk):
         self.refresh_accounts_overview()
 
     def import_proxies_from_file(self):
+        self.add_log("[UI] Import proxies from file requested.")
         file_path = filedialog.askopenfilename(
             title="Select a .txt file with proxies",
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
@@ -1963,6 +1975,7 @@ class MassDMApp(ctk.CTk):
         self.refresh_accounts_overview()
 
     def import_token_proxy_pairs_from_file(self):
+        self.add_log("[UI] Import token/proxy pairs from file requested.")
         file_path = filedialog.askopenfilename(
             title="Select a .txt file with token:proxy pairs",
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
@@ -2022,6 +2035,7 @@ class MassDMApp(ctk.CTk):
         return self._get_invite_list(raw_text, log_invalid=False)
 
     def save_invite_settings(self):
+        self.add_log("[UI] Save invite settings requested.")
         if not hasattr(self, "invite_input"):
             return
         raw_text = self.invite_input.get("1.0", "end").strip()
@@ -2063,6 +2077,7 @@ class MassDMApp(ctk.CTk):
         return unique_ids, invalid
 
     def save_joiner_settings(self):
+        self.add_log("[UI] Save joiner settings requested.")
         if not hasattr(self, "onboarding_role_whitelist_input"):
             return
         if hasattr(self, "auto_verify_button_var"):
@@ -2100,6 +2115,7 @@ class MassDMApp(ctk.CTk):
             self.onboarding_role_whitelist_input.insert("1.0", stored)
 
     def test_proxy_settings(self):
+        self.add_log("[UI] Proxy test requested.")
         proxy = ""
         if hasattr(self, "proxy_input") and self.proxy_input.winfo_exists():
             proxy = self.proxy_input.get().strip()
@@ -2121,6 +2137,7 @@ class MassDMApp(ctk.CTk):
                 self._set_input_valid(self.proxy_input, False)
 
     def test_all_account_proxies(self):
+        self.add_log("[UI] Test all account proxies requested.")
         accounts = self.db.get_active_accounts("discord")
         if not accounts:
             self.log_error("[Proxy] No active accounts to test.")
@@ -2150,6 +2167,7 @@ class MassDMApp(ctk.CTk):
             self.log_warning(f"[Proxy] Failures: {preview}{suffix}")
 
     def start_joining(self, on_complete=None):
+        self.add_log("[UI] Joiner start requested.")
         if not self.module_vars["joiner"].get():
             self.log_error("Joiner module is disabled.")
             return False
@@ -2240,6 +2258,7 @@ class MassDMApp(ctk.CTk):
         return True
 
     def start_scraping(self, on_complete=None):
+        self.add_log("[UI] Scraper start requested.")
         if not self.module_vars["scraper"].get():
             self.log_error("Scraper module is disabled.")
             return False
@@ -2412,6 +2431,7 @@ class MassDMApp(ctk.CTk):
         return True
 
     def start_status_update(self):
+        self.add_log("[UI] Auto status start requested.")
         if not self.module_vars["status"].get():
             self.log_error("Status module is disabled.")
             return
@@ -2451,7 +2471,7 @@ class MassDMApp(ctk.CTk):
 
     def stop_status_update(self):
         self.status_changer.stop()
-        self.add_log("[Status] Automatyczna zmiana statusu zatrzymana.")
+        self.add_log("[Status] Auto status update stopped.")
         self._update_auto_status_label()
 
     def _update_auto_status_label(self):
@@ -2470,6 +2490,7 @@ class MassDMApp(ctk.CTk):
         self.status_state_label.configure(text=text, text_color=color)
 
     def start_mission(self):
+        self.add_log("[UI] DM mission start requested.")
         if not self.module_vars["dm"].get():
             self.log_error("DM module is disabled.")
             return
@@ -2593,6 +2614,7 @@ class MassDMApp(ctk.CTk):
         thread.start()
 
     def stop_all(self):
+        self.add_log("[UI] Stop all requested.")
         self.worker.stop()
         self.scraper.stop()
         self.status_changer.stop()
@@ -2600,6 +2622,7 @@ class MassDMApp(ctk.CTk):
         self.add_log("All processes stopped.")
 
     def remove_account_by_id(self):
+        self.add_log("[UI] Remove account requested.")
         raw_id = self.remove_account_input.get().strip()
         if not raw_id:
             self.log_error("Enter an account ID to remove.")
@@ -2618,6 +2641,7 @@ class MassDMApp(ctk.CTk):
         self.refresh_accounts_overview()
 
     def refresh_accounts_overview(self):
+        self.add_log("[UI] Refresh accounts overview requested.")
         accounts = self.db.get_accounts_overview()
         self.acc_overview_box.delete("1.0", "end")
         if not accounts:
@@ -2651,8 +2675,9 @@ class MassDMApp(ctk.CTk):
         self.refresh_workflow_status()
 
     def reset_account_counters(self):
+        self.add_log("[UI] Reset account counters requested.")
         self.db.reset_account_counters()
-        self.add_log("[Accounts] Zresetowano liczniki dzienne.")
+        self.add_log("[Accounts] Daily counters reset.")
         self.refresh_accounts_overview()
 
     def _extract_user_ids(self, value):
@@ -2694,6 +2719,7 @@ class MassDMApp(ctk.CTk):
         return unique_ids, invalid
 
     def add_targets_from_input(self):
+        self.add_log("[UI] Add targets requested.")
         raw = self.target_input.get("1.0", "end")
         ids, invalid = self._parse_user_ids(raw)
         if not ids:
@@ -2707,6 +2733,7 @@ class MassDMApp(ctk.CTk):
         self.refresh_targets_overview()
 
     def import_targets_from_file(self):
+        self.add_log("[UI] Import targets from file requested.")
         file_path = filedialog.askopenfilename(
             title="Select a .txt file with IDs",
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
@@ -2724,11 +2751,13 @@ class MassDMApp(ctk.CTk):
         self.refresh_targets_overview()
 
     def clear_targets(self):
+        self.add_log("[UI] Clear targets requested.")
         self.db.clear_targets()
         self.add_log("[Targets] Target list cleared.")
         self.refresh_targets_overview()
 
     def refresh_targets_overview(self):
+        self.add_log("[UI] Refresh targets overview requested.")
         counts, total = self.db.get_target_counts()
         pending = counts.get("Pending", 0)
         sent = counts.get("Sent", 0)
@@ -2824,6 +2853,7 @@ class MassDMApp(ctk.CTk):
         self._update_auto_status_label()
 
     def open_settings_window(self):
+        self.add_log("[UI] Open settings requested.")
         if self.settings_window and self.settings_window.winfo_exists():
             try:
                 self.settings_window.lift()
@@ -2835,7 +2865,11 @@ class MassDMApp(ctk.CTk):
         self._unbind_settings_scroll_fix()
         self.settings_window = ctk.CTkToplevel(self)
         self.settings_window.title("Configuration")
-        self.settings_window.geometry("900x900")
+        stored_geometry = self.db.get_setting("settings_window_geometry", "")
+        if stored_geometry:
+            self.settings_window.geometry(stored_geometry)
+        else:
+            self.settings_window.geometry("900x900")
         try:
             self.settings_window.transient(self)
             self.settings_window.lift()
@@ -2873,10 +2907,115 @@ class MassDMApp(ctk.CTk):
             self._set_setting_bool("auto_onboarding", self.auto_onboarding_var.get())
             self._set_setting_bool("auto_verify_button", self.auto_verify_button_var.get())
             self._set_setting_bool("require_proxy", self.require_proxy_var.get())
+            try:
+                geometry = self.settings_window.geometry()
+                if geometry:
+                    self.db.set_setting("settings_window_geometry", geometry)
+            except Exception:
+                pass
             self.settings_window.destroy()
             self.refresh_workflow_status()
         self.settings_window = None
         self._unbind_settings_scroll_fix()
+        self.add_log("[UI] Settings window closed.")
+
+    def open_logs_window(self):
+        if self.log_window and self.log_window.winfo_exists():
+            try:
+                self.log_window.lift()
+                self.log_window.focus_force()
+            except Exception:
+                pass
+            self.log_window.focus()
+            return
+        self.log_window = ctk.CTkToplevel(self)
+        self.log_window.title("Logs")
+        stored_geometry = self.db.get_setting("log_window_geometry", "")
+        if stored_geometry:
+            self.log_window.geometry(stored_geometry)
+        else:
+            self.log_window.geometry("900x700")
+        try:
+            self.log_window.transient(self)
+            self.log_window.lift()
+            self.log_window.focus_force()
+            self.log_window.attributes("-topmost", True)
+            self.after(200, lambda: self.log_window.attributes("-topmost", False))
+        except Exception:
+            pass
+        self.log_container = ctk.CTkFrame(self.log_window, fg_color="transparent")
+        self.log_container.pack(fill="both", expand=True, padx=20, pady=20)
+        self._build_logs_panel(self.log_container)
+        self.log_window.protocol("WM_DELETE_WINDOW", self.close_logs_window)
+
+    def close_logs_window(self):
+        if self.log_window and self.log_window.winfo_exists():
+            try:
+                geometry = self.log_window.geometry()
+                if geometry:
+                    self.db.set_setting("log_window_geometry", geometry)
+                self.log_window.destroy()
+            except Exception:
+                pass
+        self.log_window = None
+        self.log_container = None
+        self.log_box = None
+        self.error_box = None
+        self.add_log("[UI] Logs window closed.")
+
+    def _build_logs_panel(self, parent):
+        self.log_controls = ctk.CTkFrame(parent, fg_color="transparent")
+        self.log_controls.pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkLabel(self.log_controls, text="Type:", text_color="#b0b0b0").pack(side="left")
+        self.log_level_menu = ctk.CTkOptionMenu(
+            self.log_controls,
+            values=["All", "Error", "Warning", "Info", "Debug"],
+            variable=self.log_level_var,
+        )
+        self.log_level_menu.pack(side="left", padx=(5, 15))
+        self.log_level_var.trace_add("write", self.apply_log_filter)
+        ctk.CTkLabel(self.log_controls, text="Log filter:", text_color="#b0b0b0").pack(side="left")
+        self.log_filter_input = ctk.CTkEntry(
+            self.log_controls,
+            textvariable=self.log_filter_var,
+            placeholder_text="Type to filter logs...",
+        )
+        self.log_filter_input.pack(side="left", padx=10, fill="x", expand=True)
+        self.log_filter_var.trace_add("write", self.apply_log_filter)
+        self.log_file_label = ctk.CTkLabel(
+            parent,
+            text=f"Log file: {self.log_file_path}",
+            text_color="#8a8a8a",
+            anchor="w",
+        )
+        self.log_file_label.pack(fill="x", padx=10, pady=(5, 0))
+        self.log_tabs = ctk.CTkTabview(parent)
+        self.log_tabs.pack(fill="both", expand=True, padx=10, pady=10)
+        self.logs_tab = self.log_tabs.add("Logs")
+        self.errors_tab = self.log_tabs.add("Errors")
+        self.log_box = ctk.CTkTextbox(self.logs_tab, height=200, fg_color="#1a1a1a")
+        self.log_box.pack(fill="both", expand=True, padx=10, pady=10)
+        self.error_controls = ctk.CTkFrame(self.errors_tab, fg_color="transparent")
+        self.error_controls.pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkLabel(self.error_controls, text="Error filter:", text_color="#b0b0b0").pack(side="left")
+        self.error_filter_input = ctk.CTkEntry(
+            self.error_controls,
+            textvariable=self.error_filter_var,
+            placeholder_text="Type to filter errors...",
+        )
+        self.error_filter_input.pack(side="left", padx=10, fill="x", expand=True)
+        self.error_filter_var.trace_add("write", self.apply_error_filter)
+        self.error_file_label = ctk.CTkLabel(
+            self.errors_tab,
+            text=f"Error log file: {self.error_log_file_path}",
+            text_color="#8a8a8a",
+            anchor="w",
+        )
+        self.error_file_label.pack(fill="x", padx=10, pady=(5, 0))
+        self.error_box = ctk.CTkTextbox(self.errors_tab, height=200, fg_color="#1a1a1a")
+        self.error_box.pack(fill="both", expand=True, padx=10, pady=10)
+        self.apply_log_filter()
+        self.apply_error_filter()
 
     def _install_settings_scroll_fix(self):
         if self._settings_scroll_fix_bound:
@@ -2956,6 +3095,7 @@ class MassDMApp(ctk.CTk):
             return
 
     def save_delay_settings(self):
+        self.add_log("[UI] Save delay settings requested.")
         dm_delay = self._parse_delay_range(
             self.dm_delay_min_input,
             self.dm_delay_max_input,
