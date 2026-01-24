@@ -18,6 +18,18 @@ class TelemetryClient:
         self._last_sent = {}
         self._lock = threading.Lock()
 
+    def _telemetry_killed(self):
+        raw = ""
+        try:
+            raw = self.db.get_setting("telemetry_kill_switch", "")
+        except Exception:
+            raw = ""
+        if raw in (None, ""):
+            return True
+        if isinstance(raw, str):
+            return raw.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(raw)
+
     def _should_send(self, token):
         if not token:
             return False
@@ -46,6 +58,10 @@ class TelemetryClient:
         return base64.b64encode(raw).decode("ascii")
 
     def send_science(self, token, user_agent, event_name, properties=None, proxy=None):
+        if self._telemetry_killed():
+            if self.log:
+                self.log("[Telemetry] Kill switch enabled; request blocked.")
+            return False
         if not self._should_send(token):
             return False
         payload = self._build_payload(event_name, properties=properties)

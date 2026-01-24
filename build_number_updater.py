@@ -19,11 +19,22 @@ BUILD_NUMBER_PATTERNS = [
 ]
 
 
+class CriticalBuildError(RuntimeError):
+    pass
+
+
 class BuildNumberUpdater:
-    def __init__(self, db_manager, log_callback=None, interval_seconds=86400):
+    def __init__(
+        self,
+        db_manager,
+        log_callback=None,
+        interval_seconds=86400,
+        critical_callback=None,
+    ):
         self.db = db_manager
         self.log = log_callback
         self.interval_seconds = interval_seconds
+        self.critical_callback = critical_callback
         self._stop = threading.Event()
 
     def stop(self):
@@ -33,6 +44,15 @@ class BuildNumberUpdater:
         while not self._stop.is_set():
             try:
                 self.run_once()
+            except CriticalBuildError as exc:
+                self._log(f"[CRITICAL] Build number update failed: {exc}")
+                if self.critical_callback:
+                    try:
+                        self.critical_callback(str(exc))
+                    except Exception:
+                        pass
+                self._stop.set()
+                break
             except Exception as exc:
                 self._log(f"[Build] Update failed: {exc}")
             self._sleep_interval()
@@ -43,10 +63,8 @@ class BuildNumberUpdater:
 
         proxy = self._select_proxy()
         if self._is_proxy_required() and not proxy:
-            self._log("[Build] Proxy required but no proxy available. Skipping update.")
             checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self._set_checked_at(checked_at)
-            return False
+            self._raise_critical("Proxy required but no proxy available for build number refresh.", checked_at)
 
         headers = {"User-Agent": USER_AGENT}
         ensure_discord_headers(headers, self.db, add_super_properties=False)
@@ -55,35 +73,38 @@ class BuildNumberUpdater:
         source_url = None
         checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        with httpx_client(proxy, headers=headers, timeout=15.0) as client:
-            response = client.get(LOGIN_URL)
-            if response.status_code != 200:
-                self._log(f"[Build] Login fetch failed: {response.status_code}")
-                self._set_checked_at(checked_at)
-                return False
-            html = response.text
-            js_urls = self._extract_js_urls(html, LOGIN_URL)
-            if not js_urls:
-                self._log("[Build] No JS assets found on login page.")
-                self._set_checked_at(checked_at)
-                return False
+        try:
+            with httpx_client(proxy, headers=headers, timeout=15.0) as client:
+                response = client.get(LOGIN_URL)
+                if response.status_code != 200:
+                    self._raise_critical(
+                        f"Login fetch failed: {response.status_code}",
+                        checked_at,
+                    )
+                html = response.text
+                js_urls = self._extract_js_urls(html, LOGIN_URL)
+                if not js_urls:
+                    self._raise_critical("No JS assets found on login page.", checked_at)
 
-            for js_url in js_urls:
-                try:
-                    js_resp = client.get(js_url)
-                except Exception:
-                    continue
-                if js_resp.status_code != 200:
-                    continue
-                build_number = self._extract_build_number(js_resp.text)
-                if build_number:
-                    source_url = js_url
-                    break
+                for js_url in js_urls:
+                    try:
+                        js_resp = client.get(js_url)
+                    except Exception:
+                        continue
+                    if js_resp.status_code != 200:
+                        continue
+                    build_number = self._extract_build_number(js_resp.text)
+                    if build_number:
+                        source_url = js_url
+                        break
+        except CriticalBuildError:
+            raise
+        except Exception as exc:
+            self._raise_critical(f"Build number refresh error: {exc}", checked_at)
 
         self._set_checked_at(checked_at)
         if not build_number:
-            self._log("[Build] build_number not found in JS assets.")
-            return False
+            self._raise_critical("build_number not found in JS assets.", checked_at)
 
         self.db.set_setting("client_build_number", str(build_number))
         self.db.set_setting("client_build_number_updated_at", checked_at)
@@ -144,6 +165,21 @@ class BuildNumberUpdater:
 
     def _set_checked_at(self, timestamp):
         self.db.set_setting("client_build_number_checked_at", timestamp)
+
+    def _raise_critical(self, message, checked_at=None):
+        if checked_at:
+            self._set_checked_at(checked_at)
+        else:
+            self._set_checked_at(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        try:
+            self.db.set_setting("build_number_critical_error", message)
+            self.db.set_setting(
+                "build_number_critical_at",
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+        except Exception:
+            pass
+        raise CriticalBuildError(message)
 
     def _extract_js_urls(self, html, base_url):
         matches = re.findall(r'<script[^>]+src="([^"]+\.js[^"]*)"', html, re.IGNORECASE)

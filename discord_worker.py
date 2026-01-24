@@ -166,15 +166,15 @@ class DiscordWorker:
                 self._wait_for_rate_limit(resp, attempt)
                 continue
             if resp.status_code in {400, 403}:
-                if resp.status_code == 403:
-                    self._clear_token_cookies(client.headers.get("Authorization"))
+                    if resp.status_code == 403:
+                        self._clear_token_cookies(client.headers.get("Authorization"))
                 captcha_payload, err, user_agent = self._solve_captcha_payload(resp)
                 if not captcha_payload:
                     self.log(f"[Captcha] Friend request blocked for {user_id}: {err}")
                     return False
                 if user_agent:
                     client.headers["User-Agent"] = user_agent
-                    set_super_properties_header(client.headers, self.db, user_agent=user_agent)
+                    set_super_properties_header(client.headers, self.db, user_agent=user_agent, proxy=proxy)
                 start = time.monotonic()
                 retry_resp = client.put(url, json=captcha_payload)
                 self._record_request(time.monotonic() - start, retry_resp)
@@ -230,6 +230,31 @@ class DiscordWorker:
             return 0.0
         cps = random.uniform(min_chars_per_sec, max_chars_per_sec)
         return max(0.2, length / max(0.1, cps))
+
+    def _get_typing_indicator_delay_range(self, default_min=1.5, default_max=3.0):
+        raw_min = ""
+        raw_max = ""
+        try:
+            raw_min = self.db.get_setting("typing_indicator_min_seconds", "")
+            raw_max = self.db.get_setting("typing_indicator_max_seconds", "")
+        except Exception:
+            raw_min = ""
+            raw_max = ""
+        try:
+            min_val = float(raw_min)
+        except (TypeError, ValueError):
+            min_val = float(default_min)
+        try:
+            max_val = float(raw_max)
+        except (TypeError, ValueError):
+            max_val = float(default_max)
+        min_val = max(0.0, min_val)
+        max_val = max(min_val, max_val)
+        return min_val, max_val
+
+    def _typing_indicator_pause(self, min_seconds=1.5, max_seconds=3.0):
+        min_val, max_val = self._get_typing_indicator_delay_range(min_seconds, max_seconds)
+        return max(0.0, random.uniform(min_val, max_val))
 
     def _post_ack(self, client, channel_id=None, message_id=None, guild_id=None):
         url = None
@@ -408,7 +433,7 @@ class DiscordWorker:
             "Content-Type": "application/json",
             "User-Agent": user_agent
         }
-        set_super_properties_header(headers, self.db)
+        set_super_properties_header(headers, self.db, proxy=proxy)
         with httpx_client(
             proxy,
             headers=headers,
@@ -457,7 +482,7 @@ class DiscordWorker:
                             return False, err
                         if user_agent:
                             client.headers["User-Agent"] = user_agent
-                            set_super_properties_header(client.headers, self.db, user_agent=user_agent)
+                            set_super_properties_header(client.headers, self.db, user_agent=user_agent, proxy=proxy)
                         captcha_payload["recipient_id"] = user_id
                         start = time.monotonic()
                         retry_resp = client.post(url_channel, json=captcha_payload)
@@ -499,7 +524,7 @@ class DiscordWorker:
                     self.log(f"[Debug] Typing indicator sent: channel_id={channel_id}.")
                 except Exception:
                     pass
-                self._sleep_with_stop(self._typing_delay_seconds(final_msg))
+                self._sleep_with_stop(self._typing_indicator_pause())
 
                 for attempt in range(self.max_retries + 1):
                     if not self._ensure_gateway_connected(token):
@@ -541,7 +566,7 @@ class DiscordWorker:
                             return False, err
                         if user_agent:
                             client.headers["User-Agent"] = user_agent
-                            set_super_properties_header(client.headers, self.db, user_agent=user_agent)
+                            set_super_properties_header(client.headers, self.db, user_agent=user_agent, proxy=proxy)
                         payload = {"content": final_msg}
                         payload.update(captcha_payload)
                         start = time.monotonic()
@@ -597,7 +622,7 @@ class DiscordWorker:
             "Content-Type": "application/json",
             "User-Agent": user_agent,
         }
-        set_super_properties_header(headers, self.db)
+        set_super_properties_header(headers, self.db, proxy=proxy)
         with httpx_client(
             proxy,
             headers=headers,
@@ -655,7 +680,7 @@ class DiscordWorker:
                             return False, err
                         if user_agent:
                             client.headers["User-Agent"] = user_agent
-                            set_super_properties_header(client.headers, self.db, user_agent=user_agent)
+                            set_super_properties_header(client.headers, self.db, user_agent=user_agent, proxy=proxy)
                         payload = {"content": message_content}
                         payload.update(captcha_payload)
                         start = time.monotonic()

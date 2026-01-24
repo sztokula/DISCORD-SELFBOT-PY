@@ -1,5 +1,7 @@
 ﻿import customtkinter as ctk
 import json
+import os
+import sys
 import queue
 import re
 import threading
@@ -20,7 +22,7 @@ from token_manager import TokenManager
 from updater import UpdateManager, UpdateError
 from metrics import HealthMetrics
 from profile_updater import ProfileUpdater
-from build_number_updater import BuildNumberUpdater
+from build_number_updater import BuildNumberUpdater, CriticalBuildError
 from telemetry import TelemetryClient
 from gateway import GatewayManager
 from openai_responder import OpenAIResponder
@@ -52,6 +54,9 @@ class MassDMApp(ctk.CTk):
             "status": ctk.BooleanVar(value=self._get_setting_bool("module_status", True)),
             "captcha": ctk.BooleanVar(value=self._get_setting_bool("module_captcha", True)),
         }
+        self.telemetry_kill_switch_var = ctk.BooleanVar(
+            value=self._get_setting_bool("telemetry_kill_switch", True)
+        )
         self.export_banned_tokens_plaintext_var = ctk.BooleanVar(
             value=self._get_setting_bool("export_banned_tokens_plaintext", False)
         )
@@ -86,7 +91,11 @@ class MassDMApp(ctk.CTk):
         self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver, self.metrics, self.telemetry) # Initialization
         self.token_manager = TokenManager(self.db, self.add_log, self.metrics, self.telemetry)
         self.profile_updater = ProfileUpdater(self.db, self.add_log, self.metrics, self.telemetry)
-        self.build_number_updater = BuildNumberUpdater(self.db, self.add_log)
+        self.build_number_updater = BuildNumberUpdater(
+            self.db,
+            self.add_log,
+            critical_callback=self.handle_critical_error,
+        )
         self._build_number_thread = threading.Thread(
             target=self.build_number_updater.run_forever,
             daemon=True,
@@ -101,6 +110,7 @@ class MassDMApp(ctk.CTk):
         self.log_filter_var = ctk.StringVar()
         self.error_filter_var = ctk.StringVar()
         self.log_level_var = ctk.StringVar(value="All")
+        self.critical_error_active = False
         self._proxy_check_cache = {}
         self._proxy_check_ttl_seconds = 600
         self._proxy_check_lock = threading.Lock()
@@ -109,6 +119,7 @@ class MassDMApp(ctk.CTk):
         self.log_file_path = self.logs_dir / f"app_{datetime.now().strftime('%Y%m%d')}.log"
         self.error_log_file_path = self.logs_dir / f"errors_{datetime.now().strftime('%Y%m%d')}.log"
         self.banlist_path = Path("banned_dead_tokens.txt")
+        self._restore_critical_banner_from_db()
 
         self.title(f"Mass-DM Farm Tool Pro v{APP_VERSION}")
         self.geometry("1100x1000") # Increased height for the new section.
@@ -170,6 +181,32 @@ class MassDMApp(ctk.CTk):
             command=self.clear_notification,
         )
         self.notification_clear_btn.pack(side="right", padx=10, pady=8)
+
+        # 0.25 CRITICAL SECTION (hidden by default)
+        self.critical_frame = ctk.CTkFrame(self.main_container, fg_color="#3b0f0f")
+        self.critical_label = ctk.CTkLabel(
+            self.critical_frame,
+            text="CRITICAL: --",
+            anchor="w",
+            text_color="#ffb3b3",
+        )
+        self.critical_label.pack(side="left", padx=10, pady=8, fill="x", expand=True)
+        self.critical_restart_btn = ctk.CTkButton(
+            self.critical_frame,
+            text="Restart App",
+            fg_color="#e74c3c",
+            command=self.restart_app,
+        )
+        self.critical_restart_btn.pack(side="right", padx=10, pady=8)
+        self.critical_clear_btn = ctk.CTkButton(
+            self.critical_frame,
+            text="Clear",
+            fg_color="#b0b0b0",
+            text_color="#1e1e1e",
+            command=self.clear_critical_state,
+        )
+        self.critical_clear_btn.pack(side="right", padx=10, pady=8)
+        self.critical_frame.pack_forget()
 
         # 0.5 HEALTH SECTION
         self.health_frame = ctk.CTkFrame(self.main_container)
@@ -1299,6 +1336,117 @@ class MassDMApp(ctk.CTk):
         self.notification_var.set(message)
         self.notification_label.configure(text_color=colors.get(level, "#8a8a8a"))
 
+    def handle_critical_error(self, message):
+        def _apply():
+            if self.critical_error_active:
+                return
+            self.critical_error_active = True
+            self.add_log(f"[CRITICAL] {message}")
+            self.show_notification(f"CRITICAL: {message}", level="error")
+            self.show_critical_banner(message)
+            self.stop_all()
+            self._disable_controls_for_critical_error()
+            try:
+                messagebox.showerror("Critical Error", message)
+            except Exception:
+                pass
+
+        try:
+            self.after(0, _apply)
+        except Exception:
+            _apply()
+
+    def _disable_controls_for_critical_error(self):
+        for attr in (
+            "start_btn",
+            "workflow_refresh_btn",
+            "workflow_next_btn",
+            "workflow_action_btn",
+            "scrape_btn",
+            "scrape_guild_btn",
+            "update_status_btn",
+            "stop_status_btn",
+            "build_refresh_btn",
+            "manual_update_btn",
+            "update_download_btn",
+        ):
+            widget = getattr(self, attr, None)
+            if widget:
+                try:
+                    widget.configure(state="disabled")
+                except Exception:
+                    pass
+
+    def show_critical_banner(self, message):
+        if not hasattr(self, "critical_frame"):
+            return
+        try:
+            if not self.critical_frame.winfo_exists():
+                return
+        except Exception:
+            return
+        self.critical_label.configure(text=f"CRITICAL: {message}")
+        self.critical_frame.pack(fill="x", pady=(0, 10))
+
+    def _restore_critical_banner_from_db(self):
+        try:
+            message = self.db.get_setting("build_number_critical_error", "")
+            if message:
+                self.critical_error_active = True
+                self.show_critical_banner(message)
+                self.show_notification(f"CRITICAL: {message}", level="error")
+        except Exception:
+            return
+
+    def clear_critical_state(self):
+        try:
+            confirm = messagebox.askyesno(
+                "Clear Critical State",
+                "Clear critical state and re-enable controls?",
+            )
+        except Exception:
+            confirm = True
+        if not confirm:
+            return
+        try:
+            self.db.set_setting("build_number_critical_error", None)
+            self.db.set_setting("build_number_critical_at", None)
+        except Exception:
+            pass
+        self.critical_error_active = False
+        try:
+            if self.critical_frame.winfo_exists():
+                self.critical_frame.pack_forget()
+        except Exception:
+            pass
+        self.clear_notification()
+        self._restore_controls_after_critical_clear()
+        self.add_log("[UI] Critical state cleared.")
+
+    def _restore_controls_after_critical_clear(self):
+        if hasattr(self, "workflow_refresh_btn"):
+            self.workflow_refresh_btn.configure(state="normal")
+        if hasattr(self, "workflow_next_btn"):
+            self.workflow_next_btn.configure(state="normal")
+        if hasattr(self, "workflow_action_btn"):
+            self.workflow_action_btn.configure(state="normal")
+        if hasattr(self, "build_refresh_btn"):
+            self.build_refresh_btn.configure(state="normal")
+        if hasattr(self, "manual_update_btn"):
+            self.manual_update_btn.configure(state="normal")
+        if hasattr(self, "update_download_btn"):
+            self.update_download_btn.configure(state="normal")
+        self.on_module_toggle()
+
+    def restart_app(self):
+        try:
+            self.add_log("[UI] Restart requested.")
+            python = sys.executable
+            args = [python] + sys.argv
+            os.execv(python, args)
+        except Exception as exc:
+            self.log_error(f"Restart failed: {exc}")
+
     def clear_notification(self):
         self.notification_var.set("Notifications: --")
         self.notification_label.configure(text_color="#8a8a8a")
@@ -1517,6 +1665,10 @@ class MassDMApp(ctk.CTk):
         def worker():
             try:
                 updated = self.build_number_updater.run_once(force=True)
+            except CriticalBuildError as exc:
+                self.add_log(f"[CRITICAL] Build number refresh failed: {exc}")
+                self.handle_critical_error(str(exc))
+                return
             except Exception as exc:
                 self.add_log(f"[Build] Manual refresh failed: {exc}")
                 self.after(0, lambda: self.show_notification("Build number refresh failed.", level="error"))
@@ -1842,7 +1994,12 @@ class MassDMApp(ctk.CTk):
     def _get_log_level(self, message):
         normalized = message.strip()
         lowered = normalized.casefold()
-        if lowered.startswith("[error]") or lowered.startswith("error:") or lowered.startswith("[!]"):
+        if (
+            lowered.startswith("[error]")
+            or lowered.startswith("error:")
+            or lowered.startswith("[!]")
+            or lowered.startswith("[critical]")
+        ):
             return "Error"
         if lowered.startswith("[warn]") or lowered.startswith("[warning]") or lowered.startswith("warning:"):
             return "Warning"
@@ -2333,6 +2490,9 @@ class MassDMApp(ctk.CTk):
 
     def start_joining(self, on_complete=None):
         self.add_log("[UI] Joiner start requested.")
+        if self.critical_error_active:
+            self.log_error("Critical error active. Restart required.")
+            return False
         if not self.module_vars["joiner"].get():
             self.log_error("Joiner module is disabled.")
             return False
@@ -2432,6 +2592,9 @@ class MassDMApp(ctk.CTk):
 
     def start_scraping(self, on_complete=None):
         self.add_log("[UI] Scraper start requested.")
+        if self.critical_error_active:
+            self.log_error("Critical error active. Restart required.")
+            return False
         if not self.module_vars["scraper"].get():
             self.log_error("Scraper module is disabled.")
             return False
@@ -2500,6 +2663,9 @@ class MassDMApp(ctk.CTk):
 
     def start_guild_scraping(self, on_complete=None):
         self.add_log("[UI] Guild scraper start requested.")
+        if self.critical_error_active:
+            self.log_error("Critical error active. Restart required.")
+            return False
         if not self.module_vars["scraper"].get():
             self.log_error("Scraper module is disabled.")
             return False
@@ -2618,6 +2784,9 @@ class MassDMApp(ctk.CTk):
 
     def start_status_update(self):
         self.add_log("[UI] Auto status start requested.")
+        if self.critical_error_active:
+            self.log_error("Critical error active. Restart required.")
+            return
         if not self.module_vars["status"].get():
             self.log_error("Status module is disabled.")
             return
@@ -2677,6 +2846,9 @@ class MassDMApp(ctk.CTk):
 
     def start_mission(self):
         self.add_log("[UI] DM mission start requested.")
+        if self.critical_error_active:
+            self.log_error("Critical error active. Restart required.")
+            return
         if not self.module_vars["dm"].get():
             self.log_error("DM module is disabled.")
             return
@@ -3113,6 +3285,7 @@ class MassDMApp(ctk.CTk):
             self._set_setting_bool("auto_onboarding", self.auto_onboarding_var.get())
             self._set_setting_bool("auto_verify_button", self.auto_verify_button_var.get())
             self._set_setting_bool("require_proxy", self.require_proxy_var.get())
+            self._set_setting_bool("telemetry_kill_switch", self.telemetry_kill_switch_var.get())
             try:
                 geometry = self.settings_window.geometry()
                 if geometry:
@@ -3331,6 +3504,15 @@ class MassDMApp(ctk.CTk):
         )
         if not friend_delay:
             return
+        typing_delay = self._parse_delay_range(
+            self.typing_delay_min_input,
+            self.typing_delay_max_input,
+            "Typing indicator delay (s)",
+            cast_type=float,
+            min_value=0.0,
+        )
+        if not typing_delay:
+            return
         if hasattr(self, "status_delay_min_input") and self.status_delay_min_input.winfo_exists():
             status_delay = self._parse_delay_range(
                 self.status_delay_min_input,
@@ -3368,6 +3550,7 @@ class MassDMApp(ctk.CTk):
         dm_delay_min_h, dm_delay_max_h = dm_delay
         join_delay_min_h, join_delay_max_h = join_delay
         friend_delay_min_h, friend_delay_max_h = friend_delay
+        typing_delay_min_s, typing_delay_max_s = typing_delay
         status_delay_min, status_delay_max = status_delay
         self.db.set_setting("dm_delay_min", str(dm_delay_min_h))
         self.db.set_setting("dm_delay_max", str(dm_delay_max_h))
@@ -3375,6 +3558,8 @@ class MassDMApp(ctk.CTk):
         self.db.set_setting("join_delay_max", str(join_delay_max_h))
         self.db.set_setting("friend_delay_min", str(friend_delay_min_h))
         self.db.set_setting("friend_delay_max", str(friend_delay_max_h))
+        self.db.set_setting("typing_indicator_min_seconds", str(typing_delay_min_s))
+        self.db.set_setting("typing_indicator_max_seconds", str(typing_delay_max_s))
         self.db.set_setting("status_delay_min_hours", str(status_delay_min))
         self.db.set_setting("status_delay_max_hours", str(status_delay_max))
         self.db.set_setting("account_min_interval", str(account_interval))
@@ -3571,6 +3756,12 @@ class MassDMApp(ctk.CTk):
         self.status_toggle.grid(row=2, column=1, padx=10, pady=5, sticky="w")
         self.captcha_toggle = ctk.CTkCheckBox(self.module_frame, text="Captcha Module", variable=self.module_vars["captcha"], command=self.on_module_toggle)
         self.captcha_toggle.grid(row=3, column=0, padx=10, pady=5, sticky="w")
+        self.telemetry_kill_switch_toggle = ctk.CTkCheckBox(
+            self.module_frame,
+            text="Telemetry kill switch (block all telemetry)",
+            variable=self.telemetry_kill_switch_var,
+        )
+        self.telemetry_kill_switch_toggle.grid(row=4, column=0, padx=10, pady=5, sticky="w")
 
         self.msg_frame = ctk.CTkFrame(parent)
         self.msg_frame.pack(fill="x", pady=10)
@@ -3674,6 +3865,8 @@ class MassDMApp(ctk.CTk):
         )
         if friend_delay_max is None:
             friend_delay_max = self._seconds_to_hours(5)
+        typing_delay_min = self._get_setting_number("typing_indicator_min_seconds", 1.5)
+        typing_delay_max = self._get_setting_number("typing_indicator_max_seconds", 3.0)
         status_delay_min = self._convert_delay_value(
             self._get_setting_number("status_delay_min_hours", 3.0),
             assume_seconds=False,
@@ -3715,26 +3908,34 @@ class MassDMApp(ctk.CTk):
         self.friend_delay_max_input.grid(row=4, column=2, padx=10, pady=5, sticky="w")
         self.friend_delay_max_input.insert(0, self._format_hours_value(friend_delay_max))
 
-        ctk.CTkLabel(self.delay_frame, text="Status delay (h) min/max").grid(row=5, column=0, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.delay_frame, text="Typing indicator delay (s) min/max").grid(row=5, column=0, padx=10, pady=5, sticky="w")
+        self.typing_delay_min_input = ctk.CTkEntry(self.delay_frame, width=120)
+        self.typing_delay_min_input.grid(row=5, column=1, padx=10, pady=5, sticky="w")
+        self.typing_delay_min_input.insert(0, self._format_hours_value(typing_delay_min))
+        self.typing_delay_max_input = ctk.CTkEntry(self.delay_frame, width=120)
+        self.typing_delay_max_input.grid(row=5, column=2, padx=10, pady=5, sticky="w")
+        self.typing_delay_max_input.insert(0, self._format_hours_value(typing_delay_max))
+
+        ctk.CTkLabel(self.delay_frame, text="Status delay (h) min/max").grid(row=6, column=0, padx=10, pady=5, sticky="w")
         self.status_delay_min_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.status_delay_min_input.grid(row=5, column=1, padx=10, pady=5, sticky="w")
+        self.status_delay_min_input.grid(row=6, column=1, padx=10, pady=5, sticky="w")
         self.status_delay_min_input.insert(0, self._format_hours_value(status_delay_min))
         self.status_delay_max_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.status_delay_max_input.grid(row=5, column=2, padx=10, pady=5, sticky="w")
+        self.status_delay_max_input.grid(row=6, column=2, padx=10, pady=5, sticky="w")
         self.status_delay_max_input.insert(0, self._format_hours_value(status_delay_max))
 
-        ctk.CTkLabel(self.delay_frame, text="Account min interval (h)").grid(row=6, column=0, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.delay_frame, text="Account min interval (h)").grid(row=7, column=0, padx=10, pady=5, sticky="w")
         self.account_min_interval_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.account_min_interval_input.grid(row=6, column=1, padx=10, pady=5, sticky="w")
+        self.account_min_interval_input.grid(row=7, column=1, padx=10, pady=5, sticky="w")
         self.account_min_interval_input.insert(0, self._format_hours_value(account_min_interval))
 
-        ctk.CTkLabel(self.delay_frame, text="Target min interval (h)").grid(row=7, column=0, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.delay_frame, text="Target min interval (h)").grid(row=8, column=0, padx=10, pady=5, sticky="w")
         self.target_min_interval_input = ctk.CTkEntry(self.delay_frame, width=120)
-        self.target_min_interval_input.grid(row=7, column=1, padx=10, pady=5, sticky="w")
+        self.target_min_interval_input.grid(row=8, column=1, padx=10, pady=5, sticky="w")
         self.target_min_interval_input.insert(0, self._format_hours_value(target_min_interval))
 
         self.delay_save_btn = ctk.CTkButton(self.delay_frame, text="Save Delays", command=self.save_delay_settings)
-        self.delay_save_btn.grid(row=8, column=0, padx=10, pady=10, sticky="w")
+        self.delay_save_btn.grid(row=9, column=0, padx=10, pady=10, sticky="w")
 
         # 2. JOINER SECTION (NEW)
         self.joiner_frame = ctk.CTkFrame(parent)

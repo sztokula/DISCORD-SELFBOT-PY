@@ -1,7 +1,7 @@
 from urllib.parse import quote, urlparse
 from contextlib import contextmanager
 from curl_cffi import requests as curl_requests
-from client_identity import IMPERSONATE_PROFILE, CHROME_VERSION
+from client_identity import IMPERSONATE_PROFILE
 
 try:
     import httpx as _httpx
@@ -228,9 +228,8 @@ def httpx_client(proxy=None, cookie_db=None, cookie_token=None, **kwargs):
         kwargs.setdefault("proxies", proxies)
     if "timeout" in kwargs:
         kwargs["timeout"] = _normalize_timeout(kwargs["timeout"])
-    expected_impersonate = f"chrome{CHROME_VERSION}"
-    if kwargs.get("impersonate") and kwargs.get("impersonate") != expected_impersonate:
-        kwargs["impersonate"] = expected_impersonate
+    if kwargs.get("impersonate") and kwargs.get("impersonate") != IMPERSONATE_PROFILE:
+        kwargs["impersonate"] = IMPERSONATE_PROFILE
     else:
         kwargs.setdefault("impersonate", IMPERSONATE_PROFILE)
     with curl_requests.Session(**kwargs) as client:

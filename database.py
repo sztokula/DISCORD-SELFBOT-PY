@@ -2,8 +2,11 @@
 import hashlib
 import json
 import os
+import queue
+import random
 import sqlite3
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,6 +18,10 @@ class DatabaseManager:
         self.write_lock = threading.Lock()
         self.log = log_callback
         self.fernet = self._init_fernet()
+        self._write_queue = queue.Queue()
+        self._write_thread_id = None
+        self._write_thread = threading.Thread(target=self._write_worker, daemon=True)
+        self._write_thread.start()
         self.init_db()
         self.sensitive_settings = {
             "export_banned_tokens_plaintext",
@@ -30,10 +37,50 @@ class DatabaseManager:
         self.warmup_min_limit = 1
 
     def get_connection(self):
-        conn = sqlite3.connect(self.db_name, timeout=30)
+        conn = sqlite3.connect(self.db_name, timeout=60)
         conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA busy_timeout=30000;")
+        conn.execute("PRAGMA busy_timeout=60000;")
         return conn
+
+    def _write_worker(self):
+        self._write_thread_id = threading.get_ident()
+        while True:
+            task = self._write_queue.get()
+            if task is None:
+                return
+            fn, event, holder = task
+            try:
+                holder["result"] = self._execute_write(fn)
+            except Exception as exc:
+                holder["error"] = exc
+            finally:
+                event.set()
+
+    def _execute_write(self, fn, retries=5, base_delay=0.2):
+        for attempt in range(retries + 1):
+            try:
+                with self.write_lock:
+                    return fn()
+            except sqlite3.OperationalError as exc:
+                message = str(exc).lower()
+                if "database is locked" in message or "database schema is locked" in message:
+                    if attempt >= retries:
+                        raise
+                    sleep_time = base_delay * (2 ** attempt) + random.uniform(0.0, 0.05)
+                    time.sleep(sleep_time)
+                    continue
+                raise
+
+    def _run_write(self, fn):
+        if threading.get_ident() == self._write_thread_id:
+            return self._execute_write(fn)
+        event = threading.Event()
+        holder = {"result": None, "error": None}
+        self._write_queue.put((fn, event, holder))
+        event.wait()
+        if holder["error"]:
+            raise holder["error"]
+        return holder["result"]
 
     def _get_key_file_path(self):
         db_path = Path(self.db_name).resolve()
@@ -94,7 +141,7 @@ class DatabaseManager:
             return None
 
     def init_db(self):
-        with self.write_lock:
+        def _init():
             conn = self.get_connection()
             cursor = conn.cursor()
             # Accounts table (keep proxy column).
@@ -154,6 +201,7 @@ class DatabaseManager:
             ''')
             conn.commit()
             conn.close()
+        self._run_write(_init)
 
     def _ensure_account_columns(self, conn):
         cursor = conn.cursor()
@@ -210,9 +258,9 @@ class DatabaseManager:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
     def add_account(self, platform, token, proxy="", limit=15, join_limit=5, status="Active"):
-        conn = None
-        try:
-            with self.write_lock:
+        def _add():
+            conn = None
+            try:
                 conn = self.get_connection()
                 cursor = conn.cursor()
                 encrypted_token = self._encrypt_token(token)
@@ -223,11 +271,12 @@ class DatabaseManager:
                 ''', (platform, encrypted_token, proxy, status, limit, join_limit, created_at))
                 conn.commit()
                 return cursor.lastrowid
-        except sqlite3.IntegrityError:
-            return None
-        finally:
-            if conn:
-                conn.close()
+            except sqlite3.IntegrityError:
+                return None
+            finally:
+                if conn:
+                    conn.close()
+        return self._run_write(_add)
 
     def get_active_accounts(self, platform):
         conn = self.get_connection()
@@ -293,7 +342,7 @@ class DatabaseManager:
         if reference_datetime is None:
             reference_datetime = datetime.now()
         reference_date = reference_datetime.strftime("%Y-%m-%d")
-        with self.write_lock:
+        def _reset():
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute('''
@@ -310,9 +359,10 @@ class DatabaseManager:
             ''', (reference_date,))
             conn.commit()
             conn.close()
+        self._run_write(_reset)
 
     def add_targets(self, user_ids, platform):
-        with self.write_lock:
+        def _add():
             conn = self.get_connection()
             cursor = conn.cursor()
             for uid in user_ids:
@@ -322,6 +372,7 @@ class DatabaseManager:
                     continue
             conn.commit()
             conn.close()
+        self._run_write(_add)
 
     def get_next_target(self, platform, min_target_interval_seconds=0):
         conn = self.get_connection()
@@ -393,7 +444,7 @@ class DatabaseManager:
         if not account_id or not target_user_id:
             return
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with self.write_lock:
+        def _record():
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute('''
@@ -403,9 +454,10 @@ class DatabaseManager:
             ''', (account_id, target_user_id, timestamp))
             conn.commit()
             conn.close()
+        self._run_write(_record)
 
     def update_target_status(self, target_id, status, error_msg=""):
-        with self.write_lock:
+        def _update():
             conn = self.get_connection()
             cursor = conn.cursor()
             if status == "Retry":
@@ -420,9 +472,10 @@ class DatabaseManager:
                 )
             conn.commit()
             conn.close()
+        self._run_write(_update)
 
     def set_target_retry(self, target_id, retry_at, error_msg=""):
-        with self.write_lock:
+        def _retry():
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute(
@@ -438,6 +491,7 @@ class DatabaseManager:
             )
             conn.commit()
             conn.close()
+        self._run_write(_retry)
 
     def get_target_retry_count(self, target_id):
         conn = self.get_connection()
@@ -450,7 +504,7 @@ class DatabaseManager:
         return int(row[0])
 
     def increment_sent_counter(self, account_id):
-        with self.write_lock:
+        def _inc():
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute('''
@@ -460,9 +514,10 @@ class DatabaseManager:
             ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), account_id))
             conn.commit()
             conn.close()
+        self._run_write(_inc)
 
     def increment_join_counter(self, account_id):
-        with self.write_lock:
+        def _inc():
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute('''
@@ -472,12 +527,14 @@ class DatabaseManager:
             ''', (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), account_id))
             conn.commit()
             conn.close()
+        self._run_write(_inc)
 
     def update_account_status(self, account_id, status):
-        with self.write_lock:
+        token_to_export = None
+        def _update():
+            nonlocal token_to_export
             conn = self.get_connection()
             cursor = conn.cursor()
-            token_to_export = None
             if status == "Banned/Dead":
                 cursor.execute("SELECT token FROM accounts WHERE id = ?", (account_id,))
                 row = cursor.fetchone()
@@ -486,6 +543,7 @@ class DatabaseManager:
             cursor.execute('UPDATE accounts SET status = ? WHERE id = ?', (status, account_id))
             conn.commit()
             conn.close()
+        self._run_write(_update)
         if token_to_export:
             self._append_banned_dead_token(token_to_export)
 
@@ -500,7 +558,10 @@ class DatabaseManager:
         return row[0]
 
     def update_account_proxy(self, account_id, proxy):
-        with self.write_lock:
+        prev_proxy = None
+        token_value = None
+        def _update():
+            nonlocal prev_proxy, token_value
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT proxy, token FROM accounts WHERE id = ?", (account_id,))
@@ -510,6 +571,7 @@ class DatabaseManager:
             cursor.execute("UPDATE accounts SET proxy = ? WHERE id = ?", (proxy, account_id))
             conn.commit()
             conn.close()
+        self._run_write(_update)
         if prev_proxy != proxy and token_value:
             self.clear_token_cookies(token_value)
 
@@ -599,7 +661,7 @@ class DatabaseManager:
         return rows
 
     def reset_account_counters(self):
-        with self.write_lock:
+        def _reset():
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute('''
@@ -611,9 +673,10 @@ class DatabaseManager:
             ''')
             conn.commit()
             conn.close()
+        self._run_write(_reset)
 
     def remove_account(self, account_id):
-        with self.write_lock:
+        def _remove():
             conn = self.get_connection()
             cursor = conn.cursor()
             token_hash = None
@@ -628,6 +691,7 @@ class DatabaseManager:
                 cursor.execute("DELETE FROM token_cookies WHERE token_hash = ?", (token_hash,))
             conn.commit()
             conn.close()
+        self._run_write(_remove)
 
     def get_target_counts(self):
         conn = self.get_connection()
@@ -654,23 +718,25 @@ class DatabaseManager:
         return rows
 
     def remove_target(self, user_id):
-        with self.write_lock:
+        def _remove():
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute("DELETE FROM targets WHERE user_id = ?", (user_id,))
             conn.commit()
             conn.close()
+        self._run_write(_remove)
 
     def clear_targets(self):
-        with self.write_lock:
+        def _clear():
             conn = self.get_connection()
             cursor = conn.cursor()
             cursor.execute("DELETE FROM targets")
             conn.commit()
             conn.close()
+        self._run_write(_clear)
 
     def set_setting(self, key, value):
-        with self.write_lock:
+        def _set():
             conn = self.get_connection()
             cursor = conn.cursor()
             if value is None:
@@ -688,6 +754,7 @@ class DatabaseManager:
             ''', (key, stored))
             conn.commit()
             conn.close()
+        self._run_write(_set)
 
     def get_setting(self, key, default=""):
         conn = self.get_connection()
@@ -735,7 +802,7 @@ class DatabaseManager:
                 raw = None
             if raw:
                 stored = self._encrypt_token(raw)
-        with self.write_lock:
+        def _set():
             conn = self.get_connection()
             cursor = conn.cursor()
             if stored is None:
@@ -753,6 +820,7 @@ class DatabaseManager:
                 )
             conn.commit()
             conn.close()
+        self._run_write(_set)
 
     def clear_token_cookies(self, token):
         if not token:
