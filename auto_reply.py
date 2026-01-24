@@ -141,16 +141,6 @@ class AutoReplyService:
             return
         if self._reply_once_per_conversation():
             self._replied_channels[channel_id] = time.monotonic()
-
-    def _prune_replied_channels(self):
-        if not self._replied_channels:
-            return
-        cutoff = time.monotonic() - self._replied_channel_ttl_seconds
-        stale = [cid for cid, ts in self._replied_channels.items() if ts < cutoff]
-        for cid in stale:
-            self._replied_channels.pop(cid, None)
-        if stale:
-            self._log(f"[Debug] Pruned replied channels: removed {len(stale)}.")
         author_name = author.get("username") or author.get("global_name")
         try:
             self._queue.put_nowait(
@@ -163,6 +153,16 @@ class AutoReplyService:
             )
         except Exception:
             return
+
+    def _prune_replied_channels(self):
+        if not self._replied_channels:
+            return
+        cutoff = time.monotonic() - self._replied_channel_ttl_seconds
+        stale = [cid for cid, ts in self._replied_channels.items() if ts < cutoff]
+        for cid in stale:
+            self._replied_channels.pop(cid, None)
+        if stale:
+            self._log(f"[Debug] Pruned replied channels: removed {len(stale)}.")
 
     def _run(self):
         while not self._stop.is_set():
@@ -179,6 +179,10 @@ class AutoReplyService:
             if not token or not channel_id or not content:
                 continue
             context = f"ch:{str(channel_id)[-6:]}"
+            skip_reason = self.responder.should_skip_reply(token)
+            if skip_reason:
+                self._log(f"[AI] Auto-reply skipped ({context}): {skip_reason}.")
+                continue
             reply = self.responder.generate_reply(content, author_name=author_name, token=token)
             if not reply:
                 self._log(f"[AI] Reply generation failed ({context}).")

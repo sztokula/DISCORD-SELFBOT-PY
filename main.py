@@ -6,6 +6,7 @@ import queue
 import re
 import threading
 import random
+import time
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -20,6 +21,7 @@ from build_number_updater import CriticalBuildError
 from proxy_utils import normalize_proxy, httpx_client
 from super_properties import set_super_properties_header
 from client_identity import USER_AGENT
+from behavior_version import CURRENT_BEHAVIOR_VERSION, seeded_rng
 import httpx
 
 ctk.set_appearance_mode("Dark")
@@ -2549,6 +2551,8 @@ class MassDMApp(ctk.CTk):
             f"auto_accept_rules={auto_accept_rules}, auto_onboarding={auto_onboarding}, "
             f"auto_verify={auto_verify_button}."
         )
+        if self.core:
+            self.core.start_gateway()
         accounts = self.db.get_active_accounts("discord")
         def _join_with_proxy_check():
             valid_accounts = self._ensure_account_proxies(accounts, "join")
@@ -2723,7 +2727,13 @@ class MassDMApp(ctk.CTk):
                         on_complete(False)
                     return
                 use_count = min(accounts_limit, len(valid_accounts))
-                chosen_accounts = random.sample(valid_accounts, k=use_count)
+                base_rng = seeded_rng(
+                    "guild_scrape",
+                    CURRENT_BEHAVIOR_VERSION,
+                    f"guild_scrape:{guild_id}",
+                )
+                shuffle_rng = random.Random(time.time_ns() ^ base_rng.getrandbits(64))
+                chosen_accounts = shuffle_rng.sample(valid_accounts, k=use_count)
                 self.add_log(f"[Scraper] Using {use_count} account(s) for guild scrape.")
                 any_added = False
                 for acc in chosen_accounts:
@@ -2950,6 +2960,8 @@ class MassDMApp(ctk.CTk):
             "use_friend_req": use_friend_req,
             "dry_run": dry_run,
         }
+        if self.core:
+            self.core.start_gateway()
         def _mission_with_proxy_check():
             accounts = self.db.get_active_accounts("discord")
             valid_accounts = self._ensure_account_proxies(accounts, "mission")

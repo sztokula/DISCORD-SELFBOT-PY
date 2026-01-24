@@ -1,5 +1,19 @@
 from urllib.parse import quote, urlparse
 from contextlib import contextmanager, asynccontextmanager
+import os
+
+
+def _sanitize_openssl_env():
+    # Avoid OpenSSL config/module overrides that can break TLS in curl_cffi on Windows.
+    if os.getenv("MASSDM_KEEP_OPENSSL_ENV", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+    for key in ("OPENSSL_CONF", "OPENSSL_MODULES"):
+        if os.getenv(key):
+            os.environ.pop(key, None)
+
+
+_sanitize_openssl_env()
+
 from curl_cffi import requests as curl_requests
 from client_identity import IMPERSONATE_PROFILE, JA3_FINGERPRINT, AKAMAI_FINGERPRINT
 
@@ -14,12 +28,22 @@ TRAFFIC_REST = "rest"
 TRAFFIC_EXTERNAL = "external"
 
 
+def _safe_log(obj, message):
+    try:
+        logger = getattr(obj, "log", None)
+        if callable(logger):
+            logger(message)
+    except Exception:
+        pass
+
+
 def load_external_proxy(db, default_scheme="http"):
     if not db:
         return None
     try:
         raw = db.get_setting("external_proxy", "")
-    except Exception:
+    except Exception as exc:
+        _safe_log(db, f"[Proxy] Failed to read external proxy: {type(exc).__name__}")
         raw = ""
     normalized = normalize_proxy(raw, default_scheme=default_scheme) if raw else ""
     return normalized or None
@@ -196,16 +220,18 @@ def _normalize_timeout(timeout):
     return timeout
 
 
-def _resolve_cookie_token(cookie_token):
+def _resolve_cookie_token(cookie_token, logger=None):
     if callable(cookie_token):
         try:
             return cookie_token()
-        except Exception:
+        except Exception as exc:
+            if callable(logger):
+                logger(f"[Cookies] Failed to resolve cookie token: {type(exc).__name__}")
             return None
     return cookie_token
 
 
-def _load_cookies_into_session(client, cookies):
+def _load_cookies_into_session(client, cookies, logger=None):
     if not cookies:
         return
     try:
@@ -234,11 +260,13 @@ def _load_cookies_into_session(client, cookies):
                 if secure is not None:
                     kwargs["secure"] = secure
                 client.cookies.set(name, value, **kwargs)
-    except Exception:
+    except Exception as exc:
+        if callable(logger):
+            logger(f"[Cookies] Failed to load cookies into session: {type(exc).__name__}")
         return
 
 
-def _dump_cookies_from_session(client):
+def _dump_cookies_from_session(client, logger=None):
     if not client or not hasattr(client, "cookies"):
         return []
     jar = getattr(client.cookies, "jar", None) or client.cookies
@@ -256,12 +284,15 @@ def _dump_cookies_from_session(client):
                 }
             )
         return [item for item in cookies if item.get("name")]
-    except Exception:
-        pass
+    except Exception as exc:
+        if callable(logger):
+            logger(f"[Cookies] Failed to dump cookies from session: {type(exc).__name__}")
     try:
         if hasattr(client.cookies, "get_dict"):
             return client.cookies.get_dict()
-    except Exception:
+    except Exception as exc:
+        if callable(logger):
+            logger(f"[Cookies] Failed to read cookies dict: {type(exc).__name__}")
         return []
     return []
 
@@ -275,18 +306,31 @@ def httpx_client(proxy=None, cookie_db=None, cookie_token=None, **kwargs):
         kwargs["timeout"] = _normalize_timeout(kwargs["timeout"])
     kwargs = _apply_tls_defaults(kwargs)
     with curl_requests.Session(**kwargs) as client:
+        logger = getattr(cookie_db, "log", None) if cookie_db else None
         if cookie_db and cookie_token:
-            token_value = _resolve_cookie_token(cookie_token)
+            token_value = _resolve_cookie_token(cookie_token, logger)
             if token_value:
-                cookies = cookie_db.get_token_cookies(token_value)
-                _load_cookies_into_session(client, cookies)
+                try:
+                    cookies = cookie_db.get_token_cookies(token_value)
+                except Exception as exc:
+                    cookies = None
+                    if callable(logger):
+                        logger(f"[Cookies] Failed to read cookies: {type(exc).__name__}")
+                _load_cookies_into_session(client, cookies, logger)
         try:
             yield client
         finally:
             if cookie_db and cookie_token:
-                token_value = _resolve_cookie_token(cookie_token)
+                token_value = _resolve_cookie_token(cookie_token, logger)
                 if token_value:
-                    cookie_db.set_token_cookies(token_value, _dump_cookies_from_session(client))
+                    try:
+                        cookie_db.set_token_cookies(
+                            token_value,
+                            _dump_cookies_from_session(client, logger),
+                        )
+                    except Exception as exc:
+                        if callable(logger):
+                            logger(f"[Cookies] Failed to save cookies: {type(exc).__name__}")
 
 
 @asynccontextmanager
@@ -304,6 +348,8 @@ async def ws_connect(url, *, proxy=None, headers=None, timeout=None, **kwargs):
             yield ws
         finally:
             try:
-                ws.close()
+                close_result = ws.close()
+                if hasattr(close_result, "__await__"):
+                    await close_result
             except Exception:
                 pass

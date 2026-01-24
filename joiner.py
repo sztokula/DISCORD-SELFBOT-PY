@@ -22,6 +22,7 @@ class DiscordJoiner:
         self.captcha_retry_max_seconds = 900
         self.max_captcha_retries = 3
         self._captcha_defer_overrides = {}
+        self._rng_cache = {}
 
     def _record_request(self, duration, response=None):
         if not self.metrics:
@@ -33,7 +34,9 @@ class DiscordJoiner:
     def _get_setting_float(self, key, default, min_value=None, max_value=None):
         try:
             raw = self.db.get_setting(key, "")
-        except Exception:
+        except Exception as exc:
+            if self.log:
+                self.log(f"[Joiner] Failed to read setting {key}: {type(exc).__name__}")
             raw = ""
         if raw in (None, ""):
             value = default
@@ -60,8 +63,19 @@ class DiscordJoiner:
                 cooldown_seconds=cooldown_seconds,
                 details=details,
             )
-        except Exception:
+        except Exception as exc:
+            if self.log:
+                self.log(f"[Token] Failed to record violation ({kind}): {type(exc).__name__}")
             return
+
+    def _rng_for_token(self, token, namespace):
+        version = get_behavior_version(self.db, token, CURRENT_BEHAVIOR_VERSION)
+        key = (token or "anon", version, namespace)
+        rng = self._rng_cache.get(key)
+        if rng is None:
+            rng = seeded_rng(token or "anon", version, namespace)
+            self._rng_cache[key] = rng
+        return rng
 
     def _post_captcha_policy(self, token, context):
         base_postpone = self._get_setting_float("captcha_postpone_rate", 0.25, 0.0, 1.0)
@@ -77,7 +91,8 @@ class DiscordJoiner:
         if total > 1.0:
             postpone_rate /= total
             mute_rate /= total
-        roll = random.random()
+        roll_rng = self._rng_for_token(token, f"captcha_roll:{context}")
+        roll = roll_rng.random()
         if roll < mute_rate:
             action = "muted"
             base_min = self._get_setting_float("captcha_mute_min_seconds", 900.0, 0.0, None)
@@ -92,7 +107,7 @@ class DiscordJoiner:
             max_delay = max(min_delay, base_max * rng.uniform(0.9, 1.1))
         else:
             return None
-        delay = random.uniform(min_delay, max_delay) if max_delay > min_delay else min_delay
+        delay = roll_rng.uniform(min_delay, max_delay) if max_delay > min_delay else min_delay
         if token:
             self._record_token_violation(
                 token,
@@ -145,8 +160,11 @@ class DiscordJoiner:
         if current_token:
             try:
                 self.db.clear_token_cookies(current_token)
-            except Exception:
-                pass
+            except Exception as exc:
+                if self.log:
+                    self.log(
+                        f"[Cookies] Account {account_id}: failed to clear cookies ({type(exc).__name__})."
+                    )
         if refreshed:
             self.log(f"[Joiner] Token for account {account_id} is still invalid. Deactivating account.")
             if account_id is not None:
@@ -235,16 +253,19 @@ class DiscordJoiner:
                         if response.status_code == 403:
                             try:
                                 self.db.clear_token_cookies(token)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                if self.log:
+                                    self.log(
+                                        f"[Cookies] Account {account_id}: failed to clear cookies ({type(exc).__name__})."
+                                    )
                         captcha_payload, err, user_agent = self._solve_captcha_payload(response)
                         if captcha_payload:
                             policy = self._post_captcha_policy(token, "join_server")
                             if policy:
                                 delay = policy["delay"]
-                                self._captcha_defer_overrides[acc_id] = delay
+                                self._captcha_defer_overrides[account_id] = delay
                                 self.log(
-                                    f"[Captcha] Post-captcha {policy['action']} for account {acc_id}: "
+                                    f"[Captcha] Post-captcha {policy['action']} for account {account_id}: "
                                     f"{int(delay)}s ({invite_code})."
                                 )
                                 return False, f"Captcha {policy['action']} ({int(delay)}s)", None
@@ -345,7 +366,8 @@ class DiscordJoiner:
             if join_counts.get(acc_id, join_today) >= join_limit:
                 self.log(f"[Joiner] Account {acc_id}: daily join limit reached ({join_today}/{join_limit}).")
                 continue
-            invite_code = random.choice(invite_codes)
+            rng = self._rng_for_token(token, "invite_choice")
+            invite_code = rng.choice(invite_codes)
             success, msg, guild_id = self.join_server(
                 acc_id,
                 token,
@@ -384,7 +406,8 @@ class DiscordJoiner:
             
             did_join_attempt = True
             # IMPORTANT: add a larger delay between joins.
-            wait = gaussian_delay(delay_min, delay_max)
+            delay_rng = self._rng_for_token(token, "join_delay")
+            wait = gaussian_delay(delay_min, delay_max, rng=delay_rng)
             self.log(f"[Joiner] Waiting {int(wait)}s before the next account...")
             self._sleep_with_stop(wait)
 
@@ -435,7 +458,8 @@ class DiscordJoiner:
                     )
                 else:
                     self.log(f"[Joiner] Account {acc_id}: ERROR ({msg}) [{task['invite_code']}]")
-            wait = gaussian_delay(delay_min, delay_max)
+            delay_rng = self._rng_for_token(task["token"], "join_delay")
+            wait = gaussian_delay(delay_min, delay_max, rng=delay_rng)
             self.log(f"[Joiner] Waiting {int(wait)}s before the next retry...")
             self._sleep_with_stop(wait)
 
@@ -500,7 +524,9 @@ class DiscordJoiner:
         if not candidates:
             return False
         sample_count = min(max(1, int(channels_to_visit)), len(candidates))
-        picked = random.sample(candidates, k=sample_count)
+        token = client.headers.get("Authorization") if hasattr(client, "headers") else None
+        rng = self._rng_for_token(token, "browse_guild") if token else random
+        picked = rng.sample(candidates, k=sample_count)
         self.log(f"[Debug] Browsing guild {guild_id}: visiting {sample_count} channel(s).")
         for idx, channel_id in enumerate(picked):
             try:
@@ -525,7 +551,7 @@ class DiscordJoiner:
                 else:
                     self._post_ack(client, channel_id=channel_id)
             if idx < len(picked) - 1:
-                self._sleep_with_stop(gaussian_delay(1.0, 3.0))
+                self._sleep_with_stop(gaussian_delay(1.0, 3.0, rng=rng))
         return True
 
     def _extract_captcha(self, response):

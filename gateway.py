@@ -336,7 +336,9 @@ class GatewayManager:
             self._log("[Gateway] No active tokens found.")
             return
         self._log(f"[Info] Gateway starting for {len(accounts)} token(s).")
-        random.shuffle(accounts)
+        shuffle_seed = seeded_rng("gateway_shuffle", CURRENT_BEHAVIOR_VERSION, "gateway_shuffle")
+        shuffle_rng = random.Random(time.time_ns() ^ shuffle_seed.getrandbits(64))
+        shuffle_rng.shuffle(accounts)
         for token, proxy in accounts:
             user_agent = get_token_user_agent(self.db, token, proxy=proxy)
             properties = build_gateway_properties(self.db, token=token, proxy=proxy, user_agent=user_agent)

@@ -1,6 +1,5 @@
 import httpx
 import time
-import random
 from datetime import datetime
 from proxy_utils import httpx_client
 from super_properties import set_super_properties_header
@@ -47,7 +46,9 @@ class StatusChanger:
     def _get_setting_float(self, key, default, min_value=None, max_value=None):
         try:
             raw = self.db.get_setting(key, "")
-        except Exception:
+        except Exception as exc:
+            if self.log:
+                self.log(f"[Status] Failed to read setting {key}: {type(exc).__name__}")
             raw = ""
         if raw in (None, ""):
             value = default
@@ -68,14 +69,18 @@ class StatusChanger:
             return False, None
         try:
             history = self.db.get_profile_history(account_id) or {}
-        except Exception:
+        except Exception as exc:
+            if self.log:
+                self.log(f"[Status] Failed to read profile history: {type(exc).__name__}")
             return False, None
         updated_at = history.get("updated_at")
         if not updated_at:
             return False, None
         try:
             updated_dt = datetime.fromisoformat(str(updated_at))
-        except Exception:
+        except Exception as exc:
+            if self.log:
+                self.log(f"[Status] Failed to parse profile timestamp: {type(exc).__name__}")
             return False, None
         elapsed = (datetime.now() - updated_dt).total_seconds()
         if elapsed < min_gap:
@@ -112,8 +117,11 @@ class StatusChanger:
         if current_token:
             try:
                 self.db.clear_token_cookies(current_token)
-            except Exception:
-                pass
+            except Exception as exc:
+                if self.log:
+                    self.log(
+                        f"[Cookies] Account {account_id}: failed to clear cookies ({type(exc).__name__})."
+                    )
         if refreshed:
             self.log(f"[Status] Token for account {account_id} is still invalid. Deactivating account.")
             if account_id is not None:
@@ -185,8 +193,12 @@ class StatusChanger:
                                 status_updated_at=now_str,
                                 updated_at=now_str,
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            if self.log:
+                                self.log(
+                                    f"[Status] Account {account_id}: failed to save profile history "
+                                    f"({type(exc).__name__})."
+                                )
                         if self.telemetry:
                             self.telemetry.send_science(
                                 token,
@@ -199,8 +211,11 @@ class StatusChanger:
                     if response.status_code == 403:
                         try:
                             self.db.clear_token_cookies(token)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            if self.log:
+                                self.log(
+                                    f"[Cookies] Account {account_id}: failed to clear cookies ({type(exc).__name__})."
+                                )
                         self.log(f"[Status] Forbidden (403) for token {token[:10]}...")
                         return False
                     if response.status_code == 429:
@@ -241,7 +256,7 @@ class StatusChanger:
             version = get_behavior_version(self.db, token, CURRENT_BEHAVIOR_VERSION)
             base_rng = seeded_rng(token or "anon", version, "status_delay")
             scale = base_rng.uniform(0.8, 1.2)
-            delay = random.uniform(1.0 * scale, 3.0 * scale)
+            delay = base_rng.uniform(1.0 * scale, 3.0 * scale)
             self._sleep_with_stop(delay, running_check=running_check)
             
         self.log("[Status] Status update finished.")
@@ -272,6 +287,7 @@ class StatusChanger:
         self.auto_running = True
         min_seconds = max(0.1, float(delay_min_hours)) * 3600.0
         max_seconds = max(min_seconds, float(delay_max_hours) * 3600.0)
+        base_rng = seeded_rng("auto_status", CURRENT_BEHAVIOR_VERSION, "auto_status")
         while self.auto_running:
             self.log("[Status] Starting automatic status update.")
             self._update_all_accounts(
@@ -282,7 +298,7 @@ class StatusChanger:
             )
             if not self.auto_running:
                 break
-            wait_seconds = random.uniform(min_seconds, max_seconds)
+            wait_seconds = base_rng.uniform(min_seconds, max_seconds)
             self.log(f"[Status] Next update in {wait_seconds / 3600:.2f}h.")
             self._sleep_with_stop(wait_seconds, running_check=lambda: self.auto_running)
         self.auto_running = False

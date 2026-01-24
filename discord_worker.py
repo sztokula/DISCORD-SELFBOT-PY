@@ -31,6 +31,7 @@ class DiscordWorker:
         self.max_captcha_retries = 3
         self.dm_warmup_hours = self._get_dm_warmup_hours()
         self._last_action_at = time.monotonic()
+        self._rng_cache = {}
 
     def _get_dm_warmup_hours(self):
         try:
@@ -73,8 +74,9 @@ class DiscordWorker:
     def _clear_token_cookies(self, token):
         try:
             self.db.clear_token_cookies(token)
-        except Exception:
-            pass
+        except Exception as exc:
+            if self.log:
+                self.log(f"[Cookies] Failed to clear cookies: {type(exc).__name__}")
 
     def _record_request(self, duration, response=None):
         self._last_action_at = time.monotonic()
@@ -102,8 +104,19 @@ class DiscordWorker:
                 cooldown_seconds=cooldown_seconds,
                 details=details,
             )
-        except Exception:
+        except Exception as exc:
+            if self.log:
+                self.log(f"[Token] Failed to record violation ({kind}): {type(exc).__name__}")
             return
+
+    def _rng_for_token(self, token, namespace):
+        version = get_behavior_version(self.db, token, CURRENT_BEHAVIOR_VERSION)
+        key = (token or "anon", version, namespace)
+        rng = self._rng_cache.get(key)
+        if rng is None:
+            rng = seeded_rng(token or "anon", version, namespace)
+            self._rng_cache[key] = rng
+        return rng
 
     def _get_setting_float(self, key, default, min_value=None, max_value=None):
         try:
@@ -137,7 +150,8 @@ class DiscordWorker:
         if total > 1.0:
             postpone_rate /= total
             mute_rate /= total
-        roll = random.random()
+        roll_rng = self._rng_for_token(token, f"captcha_roll:{context}")
+        roll = roll_rng.random()
         if roll < mute_rate:
             action = "muted"
             base_min = self._get_setting_float("captcha_mute_min_seconds", 900.0, 0.0, None)
@@ -152,7 +166,7 @@ class DiscordWorker:
             max_delay = max(min_delay, base_max * rng.uniform(0.9, 1.1))
         else:
             return None
-        delay = random.uniform(min_delay, max_delay) if max_delay > min_delay else min_delay
+        delay = roll_rng.uniform(min_delay, max_delay) if max_delay > min_delay else min_delay
         if token:
             self._record_token_violation(
                 token,
@@ -164,14 +178,15 @@ class DiscordWorker:
             )
         return {"action": action, "delay": delay}
 
-    def parse_spintax(self, text):
+    def parse_spintax(self, text, rng=None):
         """Replace {option1|option2} with a random option."""
+        rand = rng or random
         while True:
             match = re.search(r"\{([^{}]*)\}", text)
             if not match:
                 break
             options = [option for option in match.group(1).split("|") if option]
-            text = text.replace(match.group(0), random.choice(options) if options else "", 1)
+            text = text.replace(match.group(0), rand.choice(options) if options else "", 1)
         return text
 
     def _choose_custom_list(self, raw_value, fallback):
@@ -180,16 +195,17 @@ class DiscordWorker:
         items = [item.strip() for item in raw_value.split(",") if item.strip()]
         return items if items else fallback
 
-    def _replace_random_tokens(self, text):
+    def _replace_random_tokens(self, text, rng=None):
+        rand = rng or random
         def replace_tag(match):
             custom = match.group(1)
             options = self._choose_custom_list(custom, self.default_tags)
-            return random.choice(options)
+            return rand.choice(options)
 
         def replace_emoji(match):
             custom = match.group(1)
             options = self._choose_custom_list(custom, self.default_emojis)
-            return random.choice(options)
+            return rand.choice(options)
 
         def replace_num(match):
             start = match.group(1)
@@ -202,18 +218,19 @@ class DiscordWorker:
                 end_val = 999
             if start_val > end_val:
                 start_val, end_val = end_val, start_val
-            return str(random.randint(start_val, end_val))
+            return str(rand.randint(start_val, end_val))
 
         text = re.sub(r"\[\[tag(?::([^\]]+))?\]\]", replace_tag, text)
         text = re.sub(r"\[\[emoji(?::([^\]]+))?\]\]", replace_emoji, text)
         text = re.sub(r"\[\[num(?::(\d+)-(\d+))?\]\]", replace_num, text)
         return text
 
-    def render_message(self, template):
-        message = self._replace_random_tokens(template)
-        return self.parse_spintax(message)
+    def render_message(self, template, rng=None):
+        message = self._replace_random_tokens(template, rng=rng)
+        return self.parse_spintax(message, rng=rng)
 
-    def _pick_template(self, templates):
+    def _pick_template(self, templates, rng=None):
+        rand = rng or random
         if not templates:
             return ""
         if len(templates) == 1:
@@ -226,7 +243,7 @@ class DiscordWorker:
         candidates = [tpl for tpl in templates if tpl not in recent_set]
         if not candidates:
             candidates = templates
-        chosen = random.choice(candidates)
+        chosen = rand.choice(candidates)
         self._last_template = chosen
         self._recent_templates.append(chosen)
         return chosen
@@ -329,13 +346,14 @@ class DiscordWorker:
             remaining = end_time - time.monotonic()
             time.sleep(min(interval, max(0.0, remaining)))
 
-    def _typing_delay_seconds(self, message, min_chars_per_sec=5.0, max_chars_per_sec=8.0):
+    def _typing_delay_seconds(self, message, min_chars_per_sec=5.0, max_chars_per_sec=8.0, rng=None):
         if not message:
             return 0.0
         length = len(message)
         if length <= 0:
             return 0.0
-        cps = random.uniform(min_chars_per_sec, max_chars_per_sec)
+        rand = rng or random
+        cps = rand.uniform(min_chars_per_sec, max_chars_per_sec)
         return max(0.2, length / max(0.1, cps))
 
     def _get_typing_indicator_delay_range(self, default_min=1.5, default_max=3.0):
@@ -359,9 +377,10 @@ class DiscordWorker:
         max_val = max(min_val, max_val)
         return min_val, max_val
 
-    def _typing_indicator_pause(self, min_seconds=1.5, max_seconds=3.0):
+    def _typing_indicator_pause(self, min_seconds=1.5, max_seconds=3.0, rng=None):
         min_val, max_val = self._get_typing_indicator_delay_range(min_seconds, max_seconds)
-        return max(0.0, random.uniform(min_val, max_val))
+        rand = rng or random
+        return max(0.0, rand.uniform(min_val, max_val))
 
     def _post_ack(self, client, channel_id=None, message_id=None, guild_id=None):
         url = None
@@ -524,11 +543,13 @@ class DiscordWorker:
         dry_run=False,
     ):
         if dry_run:
-            final_msg = self.render_message(message_template)
+            render_rng = self._rng_for_token(token, "dm_render") if token else None
+            final_msg = self.render_message(message_template, rng=render_rng)
             if add_friend:
                 self.log(f"[Dry-Run] Would send friend request to {user_id}.")
                 if friend_delay_max > 0:
-                    delay = gaussian_delay(friend_delay_min, friend_delay_max)
+                    delay_rng = self._rng_for_token(token, "friend_delay") if token else None
+                    delay = gaussian_delay(friend_delay_min, friend_delay_max, rng=delay_rng)
                     if delay > 0:
                         self.log(f"[Dry-Run] Waiting {int(delay)}s before DM to {user_id}.")
                         self._sleep_with_stop(delay)
@@ -556,7 +577,8 @@ class DiscordWorker:
                 if add_friend:
                     self.send_friend_request(client, user_id, proxy=proxy)
                     if friend_delay_max > 0:
-                        delay = gaussian_delay(friend_delay_min, friend_delay_max)
+                        delay_rng = self._rng_for_token(token, "friend_delay")
+                        delay = gaussian_delay(friend_delay_min, friend_delay_max, rng=delay_rng)
                         if delay > 0:
                             self.log(f"[Friend Request] Waiting {int(delay)}s before DM to {user_id}.")
                             self._sleep_with_stop(delay)
@@ -645,7 +667,8 @@ class DiscordWorker:
                 typing_url = f"https://discord.com/api/v9/channels/{channel_id}/typing"
 
                 # Message randomization (templates + spintax).
-                final_msg = self.render_message(message_template)
+                render_rng = self._rng_for_token(token, "dm_render")
+                final_msg = self.render_message(message_template, rng=render_rng)
                 self.log(f"[Debug] DM channel ready: channel_id={channel_id}.")
 
                 # Prefetch last messages + ack before sending DM.
@@ -660,7 +683,8 @@ class DiscordWorker:
                     self.log(f"[Debug] Typing indicator sent: channel_id={channel_id}.")
                 except Exception:
                     pass
-                self._sleep_with_stop(self._typing_indicator_pause())
+                typing_rng = self._rng_for_token(token, "typing")
+                self._sleep_with_stop(self._typing_indicator_pause(rng=typing_rng))
 
                 for attempt in range(self.max_retries + 1):
                     if not self._ensure_gateway_connected(token):
@@ -829,7 +853,8 @@ class DiscordWorker:
                     self.log(f"[Debug] Typing indicator sent: channel_id={channel_id}.")
                 except Exception:
                     pass
-                self._sleep_with_stop(self._typing_delay_seconds(message_content))
+                typing_rng = self._rng_for_token(token, "typing")
+                self._sleep_with_stop(self._typing_delay_seconds(message_content, rng=typing_rng))
 
                 for attempt in range(self.max_retries + 1):
                     if not self._ensure_gateway_connected(token):
@@ -1038,7 +1063,8 @@ class DiscordWorker:
 
                 t_id, u_id = target
                 did_send_attempt = True
-                chosen_template = self._pick_template(message_templates)
+                template_rng = self._rng_for_token(token, "template")
+                chosen_template = self._pick_template(message_templates, rng=template_rng)
                 success, msg = self.send_dm(
                     acc_id,
                     token,
@@ -1078,6 +1104,7 @@ class DiscordWorker:
                         recently_reconnected = False
                 did_send = bool(dry_run or success)
                 sent_for_delay = sent_today + (1 if did_send else 0)
+                delay_rng = self._rng_for_token(token, "dm_delay")
                 wait_seconds = self.delay_controller.next_delay(
                     account_id=acc_id,
                     base_min=delay_min,
@@ -1086,6 +1113,7 @@ class DiscordWorker:
                     sent_today=sent_for_delay,
                     did_send=did_send,
                     recently_reconnected=recently_reconnected,
+                    rng=delay_rng,
                 )
                 self._sleep_with_stop(wait_seconds)
 

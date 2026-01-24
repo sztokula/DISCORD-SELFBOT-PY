@@ -1,0 +1,359 @@
+[2026-01-24 14:38:14] [Debug] Workflow stage set: setup.
+[2026-01-24 14:38:14] [UI] Open logs requested.
+[2026-01-24 14:38:15] [Info] Account 6 restored to Active (proxy set).
+[2026-01-24 14:38:15] [Info] Gateway starting for 1 token(s).
+[2026-01-24 14:38:19] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:38:20] [Gateway] IDENTIFY sent
+[2026-01-24 14:38:21] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:38:25] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:38:25] [Gateway] IDENTIFY sent
+[2026-01-24 14:38:27] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:38:28] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:38:29] [Gateway] IDENTIFY sent
+[2026-01-24 14:38:30] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:38:32] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:38:33] [Gateway] IDENTIFY sent
+[2026-01-24 14:38:34] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:38:37] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:38:37] [Gateway] IDENTIFY sent
+[2026-01-24 14:38:40] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:38:42] [Gateway] reconnect attempt 1 after error: Failed to perform, curl: (35) TLS connect error: error:00000000:invalid library (0):OPENSSL_internal:invalid library (0). See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:38:42] [Gateway] reconnecting after error: Failed to perform, curl: (35) TLS connect error: error:00000000:invalid library (0):OPENSSL_internal:invalid library (0). See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:38:42] [Error] Gateway connection failed: Failed to perform, curl: (35) TLS connect error: error:00000000:invalid library (0):OPENSSL_internal:invalid library (0). See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:38:49] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:38:49] [Gateway] IDENTIFY sent
+[2026-01-24 14:38:52] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:38:55] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:38:56] [Gateway] IDENTIFY sent
+[2026-01-24 14:38:58] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:39:01] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:39:02] [Gateway] IDENTIFY sent
+[2026-01-24 14:39:05] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:39:08] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:39:08] [Gateway] IDENTIFY sent
+[2026-01-24 14:39:11] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:39:12] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:39:13] [Gateway] IDENTIFY sent
+[2026-01-24 14:39:15] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:39:17] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:39:18] [Gateway] IDENTIFY sent
+[2026-01-24 14:39:19] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:39:21] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:39:21] [Gateway] IDENTIFY sent
+[2026-01-24 14:39:22] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:39:24] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:39:25] [Gateway] IDENTIFY sent
+[2026-01-24 14:39:27] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:39:29] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:39:30] [Gateway] IDENTIFY sent
+[2026-01-24 14:39:32] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:39:33] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:39:34] [Gateway] IDENTIFY sent
+[2026-01-24 14:39:36] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:39:38] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:39:39] [Gateway] IDENTIFY sent
+[2026-01-24 14:39:40] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:39:41] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:39:41] [Gateway] IDENTIFY sent
+[2026-01-24 14:39:41] [UI] Workflow advance requested.
+[2026-01-24 14:39:41] [Debug] Workflow stage set: join.
+[2026-01-24 14:39:44] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:39:47] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:39:47] [Gateway] IDENTIFY sent
+[2026-01-24 14:39:50] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:39:52] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:39:53] [Gateway] IDENTIFY sent
+[2026-01-24 14:39:55] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:39:57] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:39:57] [Gateway] IDENTIFY sent
+[2026-01-24 14:40:00] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:40:02] [Gateway] reconnect attempt 1 after error: Failed to perform, curl: (56) Connection closed abruptly. See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:40:02] [Gateway] reconnecting after error: Failed to perform, curl: (56) Connection closed abruptly. See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:40:02] [Error] Gateway connection failed: Failed to perform, curl: (56) Connection closed abruptly. See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:40:09] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:40:10] [UI] Logs window closed.
+[2026-01-24 14:40:10] [Gateway] IDENTIFY sent
+[2026-01-24 14:40:12] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:40:15] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:40:15] [Gateway] IDENTIFY sent
+[2026-01-24 14:40:18] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:40:19] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:40:20] [Gateway] IDENTIFY sent
+[2026-01-24 14:40:22] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:40:23] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:40:24] [Gateway] IDENTIFY sent
+[2026-01-24 14:40:26] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:40:28] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:40:28] [Gateway] IDENTIFY sent
+[2026-01-24 14:40:31] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:40:33] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:40:34] [Gateway] IDENTIFY sent
+[2026-01-24 14:40:35] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:40:36] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:40:37] [Gateway] IDENTIFY sent
+[2026-01-24 14:40:39] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:40:42] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:40:43] [Gateway] IDENTIFY sent
+[2026-01-24 14:40:46] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:40:50] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:40:50] [Gateway] IDENTIFY sent
+[2026-01-24 14:40:53] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:40:54] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:40:55] [Gateway] IDENTIFY sent
+[2026-01-24 14:40:57] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:41:01] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:41:02] [Gateway] IDENTIFY sent
+[2026-01-24 14:41:04] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:41:08] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:41:08] [Gateway] IDENTIFY sent
+[2026-01-24 14:41:11] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:41:14] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:41:15] [Gateway] IDENTIFY sent
+[2026-01-24 14:41:18] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:41:20] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:41:21] [Gateway] IDENTIFY sent
+[2026-01-24 14:41:23] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:41:24] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:41:25] [Gateway] IDENTIFY sent
+[2026-01-24 14:41:26] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:41:28] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:41:29] [Gateway] IDENTIFY sent
+[2026-01-24 14:41:30] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:41:31] [Gateway] reconnect attempt 1 after error: Failed to perform, curl: (35) TLS connect error: error:00000000:invalid library (0):OPENSSL_internal:invalid library (0). See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:41:31] [Gateway] reconnecting after error: Failed to perform, curl: (35) TLS connect error: error:00000000:invalid library (0):OPENSSL_internal:invalid library (0). See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:41:31] [Error] Gateway connection failed: Failed to perform, curl: (35) TLS connect error: error:00000000:invalid library (0):OPENSSL_internal:invalid library (0). See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:41:39] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:41:40] [Gateway] IDENTIFY sent
+[2026-01-24 14:41:42] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:41:44] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:41:44] [Gateway] IDENTIFY sent
+[2026-01-24 14:41:46] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:41:48] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:41:48] [Gateway] IDENTIFY sent
+[2026-01-24 14:41:49] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:41:52] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:41:53] [Gateway] IDENTIFY sent
+[2026-01-24 14:41:54] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:41:56] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:41:56] [Gateway] IDENTIFY sent
+[2026-01-24 14:41:58] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:42:00] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:42:01] [Gateway] IDENTIFY sent
+[2026-01-24 14:42:03] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:42:05] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:42:05] [Gateway] IDENTIFY sent
+[2026-01-24 14:42:08] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:42:10] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:42:10] [Gateway] IDENTIFY sent
+[2026-01-24 14:42:13] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:42:14] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:42:15] [Gateway] IDENTIFY sent
+[2026-01-24 14:42:17] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:42:20] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:42:21] [Gateway] IDENTIFY sent
+[2026-01-24 14:42:23] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:42:25] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:42:25] [Gateway] IDENTIFY sent
+[2026-01-24 14:42:28] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:42:29] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:42:30] [Gateway] IDENTIFY sent
+[2026-01-24 14:42:32] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:42:34] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:42:35] [Gateway] IDENTIFY sent
+[2026-01-24 14:42:38] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:42:40] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:42:40] [Gateway] IDENTIFY sent
+[2026-01-24 14:42:43] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:42:46] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:42:46] [Gateway] IDENTIFY sent
+[2026-01-24 14:42:49] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:42:50] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:42:51] [Gateway] IDENTIFY sent
+[2026-01-24 14:42:53] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:42:55] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:42:55] [Gateway] IDENTIFY sent
+[2026-01-24 14:42:58] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:42:59] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:43:00] [Gateway] IDENTIFY sent
+[2026-01-24 14:43:02] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:43:06] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:43:06] [Gateway] IDENTIFY sent
+[2026-01-24 14:43:09] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:43:11] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:43:13] [Gateway] reconnect attempt 1 after error: WebSocket is closed
+[2026-01-24 14:43:13] [Gateway] reconnecting after error: WebSocket is closed
+[2026-01-24 14:43:13] [Error] Gateway connection failed: WebSocket is closed
+[2026-01-24 14:43:21] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:43:21] [Gateway] IDENTIFY sent
+[2026-01-24 14:43:24] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:43:26] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:43:27] [Gateway] IDENTIFY sent
+[2026-01-24 14:43:30] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:43:32] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:43:32] [Gateway] IDENTIFY sent
+[2026-01-24 14:43:35] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:43:38] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:43:38] [Gateway] IDENTIFY sent
+[2026-01-24 14:43:41] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:43:43] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:43:43] [Gateway] IDENTIFY sent
+[2026-01-24 14:43:46] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:43:49] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:43:50] [Gateway] IDENTIFY sent
+[2026-01-24 14:43:52] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:43:56] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:43:57] [Gateway] IDENTIFY sent
+[2026-01-24 14:44:00] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:44:01] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:44:02] [Gateway] IDENTIFY sent
+[2026-01-24 14:44:04] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:44:07] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:44:08] [Gateway] IDENTIFY sent
+[2026-01-24 14:44:11] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:44:14] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:44:14] [Gateway] IDENTIFY sent
+[2026-01-24 14:44:17] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:44:20] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:44:20] [Gateway] IDENTIFY sent
+[2026-01-24 14:44:23] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:44:25] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:44:26] [Gateway] IDENTIFY sent
+[2026-01-24 14:44:29] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:44:30] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:44:31] [Gateway] IDENTIFY sent
+[2026-01-24 14:44:33] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:44:35] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:44:36] [Gateway] IDENTIFY sent
+[2026-01-24 14:44:39] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:44:51] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:44:52] [Gateway] IDENTIFY sent
+[2026-01-24 14:44:55] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:44:56] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:44:56] [Gateway] IDENTIFY sent
+[2026-01-24 14:44:59] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:45:01] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:45:01] [Gateway] IDENTIFY sent
+[2026-01-24 14:45:04] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:45:06] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:45:07] [Gateway] IDENTIFY sent
+[2026-01-24 14:45:10] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:45:11] [Gateway] reconnect attempt 1 after error: Failed to perform, curl: (35) TLS connect error: error:00000000:invalid library (0):OPENSSL_internal:invalid library (0). See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:45:11] [Gateway] reconnecting after error: Failed to perform, curl: (35) TLS connect error: error:00000000:invalid library (0):OPENSSL_internal:invalid library (0). See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:45:11] [Error] Gateway connection failed: Failed to perform, curl: (35) TLS connect error: error:00000000:invalid library (0):OPENSSL_internal:invalid library (0). See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:45:19] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:45:20] [Gateway] IDENTIFY sent
+[2026-01-24 14:45:22] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:45:25] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:45:26] [Gateway] IDENTIFY sent
+[2026-01-24 14:45:28] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:45:31] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:45:32] [Gateway] IDENTIFY sent
+[2026-01-24 14:45:35] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:45:36] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:45:37] [Gateway] IDENTIFY sent
+[2026-01-24 14:45:39] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:45:40] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:45:41] [Gateway] IDENTIFY sent
+[2026-01-24 14:45:42] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:45:44] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:45:44] [Gateway] IDENTIFY sent
+[2026-01-24 14:45:45] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:45:58] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:45:58] [Gateway] IDENTIFY sent
+[2026-01-24 14:45:59] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:46:01] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:46:02] [Gateway] IDENTIFY sent
+[2026-01-24 14:46:04] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:46:07] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:46:07] [Gateway] IDENTIFY sent
+[2026-01-24 14:46:10] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:46:12] [Gateway] reconnect attempt 1 after error: Failed to perform, curl: (56) Connection closed abruptly. See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:46:12] [Gateway] reconnecting after error: Failed to perform, curl: (56) Connection closed abruptly. See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:46:12] [Error] Gateway connection failed: Failed to perform, curl: (56) Connection closed abruptly. See https://curl.se/libcurl/c/libcurl-errors.html first for more details.
+[2026-01-24 14:46:20] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:46:20] [Gateway] IDENTIFY sent
+[2026-01-24 14:46:23] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:46:25] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:46:26] [Gateway] IDENTIFY sent
+[2026-01-24 14:46:29] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:46:31] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:46:31] [Gateway] IDENTIFY sent
+[2026-01-24 14:46:34] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:46:38] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:46:39] [Gateway] IDENTIFY sent
+[2026-01-24 14:46:42] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:46:44] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:46:44] [Gateway] IDENTIFY sent
+[2026-01-24 14:46:45] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:46:47] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:46:47] [Gateway] IDENTIFY sent
+[2026-01-24 14:46:48] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:46:50] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:46:50] [Gateway] IDENTIFY sent
+[2026-01-24 14:46:52] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:46:55] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:46:56] [Gateway] IDENTIFY sent
+[2026-01-24 14:46:57] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:46:58] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:46:59] [Gateway] IDENTIFY sent
+[2026-01-24 14:47:00] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:47:02] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:47:03] [Gateway] IDENTIFY sent
+[2026-01-24 14:47:05] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:47:08] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:47:08] [Gateway] IDENTIFY sent
+[2026-01-24 14:47:10] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:47:12] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:47:12] [Gateway] IDENTIFY sent
+[2026-01-24 14:47:14] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:47:16] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:47:16] [Gateway] IDENTIFY sent
+[2026-01-24 14:47:18] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:47:20] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:47:21] [Gateway] IDENTIFY sent
+[2026-01-24 14:47:23] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:47:26] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:47:27] [Gateway] IDENTIFY sent
+[2026-01-24 14:47:30] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:47:31] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:47:32] [Gateway] IDENTIFY sent
+[2026-01-24 14:47:34] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:47:36] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:47:37] [Gateway] IDENTIFY sent
+[2026-01-24 14:47:38] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:47:41] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:47:41] [Gateway] IDENTIFY sent
+[2026-01-24 14:47:44] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:47:46] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:47:47] [Gateway] IDENTIFY sent
+[2026-01-24 14:47:50] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:47:52] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:47:53] [Gateway] IDENTIFY sent
+[2026-01-24 14:47:56] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:47:57] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:47:58] [Gateway] IDENTIFY sent
+[2026-01-24 14:48:01] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:48:03] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:48:03] [Gateway] IDENTIFY sent
+[2026-01-24 14:48:06] [Warn] Gateway disconnected (token=...h0KbU0).
+[2026-01-24 14:48:08] [Info] Gateway connected (token=...h0KbU0).
+[2026-01-24 14:48:30] [Debug] Workflow stage set: setup.
+[2026-01-24 14:48:30] [UI] Open logs requested.
+[2026-01-24 14:48:30] [Debug] Logs window geometry restored: 900x700+90+156.
+[2026-01-24 14:48:38] [UI] Logs window closed.
+[2026-01-24 14:48:39] [UI] Open logs requested.
+[2026-01-24 14:48:39] [Debug] Logs window geometry restored: 900x700+-1+109.
+[2026-01-24 14:48:45] [UI] Logs window closed.
+[2026-01-24 14:48:47] [Debug] Workflow status refresh: accounts=1, proxies=1, pool=0, invites=1, templates=1, settings_loaded=False.
+[2026-01-24 14:48:48] [UI] Open logs requested.
+[2026-01-24 14:48:48] [Debug] Logs window geometry restored: 900x700+-1+109.
+[2026-01-24 14:48:51] [UI] Logs window closed.
+[2026-01-24 14:48:52] [UI] Open settings requested.
+[2026-01-24 14:48:56] [UI] Refresh accounts overview requested.
+[2026-01-24 14:48:56] [Debug] Accounts overview refreshed: total=1.
+[2026-01-24 14:48:56] [Debug] Workflow status refresh: accounts=1, proxies=1, pool=0, invites=1, templates=1, settings_loaded=False.
+[2026-01-24 14:48:56] [UI] Refresh targets overview requested.
+[2026-01-24 14:48:56] [Debug] Targets overview counts: total=1, pending=1, retry=0, sent=0, failed=0, dry_run=0.
+[2026-01-24 14:48:56] [Debug] Workflow stage set: setup.
+[2026-01-24 14:48:56] [Debug] Workflow status refresh: accounts=1, proxies=1, pool=0, invites=1, templates=1, settings_loaded=False.
+[2026-01-24 14:48:56] [Debug] Workflow status refresh: accounts=1, proxies=1, pool=0, invites=1, templates=1, settings_loaded=True.

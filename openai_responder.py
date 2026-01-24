@@ -53,6 +53,13 @@ class OpenAIResponder:
     def _get_behavior_version(self, token):
         return get_behavior_version(self.db, token, CURRENT_BEHAVIOR_VERSION)
 
+    def _mutation_rng(self, token, version):
+        if not token:
+            return random.Random(time.time_ns())
+        base_rng = seeded_rng(token, version, "ai_mutation")
+        seed = time.time_ns() ^ base_rng.getrandbits(64)
+        return random.Random(seed)
+
     def _token_style(self, token, version):
         if not token:
             return {
@@ -60,8 +67,11 @@ class OpenAIResponder:
                 "emoji_rate": 0.2,
                 "typo_rate": 0.0,
                 "pause_rate": 0.1,
+                "interrupt_rate": 0.1,
                 "lowercase_rate": 0.0,
                 "shorten_rate": 0.1,
+                "cutoff_rate": 0.05,
+                "no_reply_rate": 0.03,
                 "min_len": 8,
                 "max_len": 160,
                 "emojis": ["🙂", "👍", "🙌"],
@@ -86,6 +96,10 @@ class OpenAIResponder:
             "emojis": rng.sample(emoji_pool, k=rng.randint(2, 5)),
             "reactions": rng.sample(reactions, k=rng.randint(3, 6)),
         }
+        extras_rng = seeded_rng(token, version, "ai_style_extras")
+        style["interrupt_rate"] = style.get("pause_rate", 0.0)
+        style["cutoff_rate"] = extras_rng.uniform(0.04, 0.18)
+        style["no_reply_rate"] = extras_rng.uniform(0.02, 0.08)
         self._style_cache[cache_key] = style
         return style
 
@@ -119,17 +133,35 @@ class OpenAIResponder:
             return " ".join(words[:mid] + ["..."] + words[mid:])
         return text + "..."
 
-    def _add_typo(self, text):
+    def _hard_cutoff(self, text, rng):
+        if not text:
+            return text
+        if len(text) < 6:
+            return text + "..."
+        min_cut = max(2, int(len(text) * 0.35))
+        max_cut = max(min_cut + 1, int(len(text) * 0.8))
+        cut = rng.randint(min_cut, max_cut)
+        snippet = text[:cut].rstrip()
+        if not snippet:
+            return text
+        if snippet.endswith("..."):
+            return snippet
+        snippet = snippet.rstrip(".,;:!?")
+        if not snippet:
+            return text
+        return snippet + "..."
+
+    def _add_typo(self, text, rng):
         words = re.findall(r"[A-Za-z]{4,}", text)
         if not words:
             return text
-        word = random.choice(words)
+        word = rng.choice(words)
         idx = text.find(word)
         if idx < 0:
             return text
         if len(word) < 4:
             return text
-        pos = random.randint(1, len(word) - 2)
+        pos = rng.randint(1, len(word) - 2)
         typo = list(word)
         typo[pos - 1], typo[pos] = typo[pos], typo[pos - 1]
         typo_word = "".join(typo)
@@ -140,10 +172,20 @@ class OpenAIResponder:
             return text
         return text[0].lower() + text[1:]
 
-    def _append_emoji(self, text, emojis):
+    def _append_emoji(self, text, emojis, rng):
         if any(e in text for e in emojis):
             return text
-        return f"{text} {random.choice(emojis)}"
+        return f"{text} {rng.choice(emojis)}"
+
+    def should_skip_reply(self, token):
+        if not self._mutations_enabled():
+            return None
+        version = self._get_behavior_version(token)
+        style = self._token_style(token, version)
+        rng = self._mutation_rng(token, version)
+        if rng.random() < style.get("no_reply_rate", 0.0):
+            return "no_reply"
+        return None
 
     def _mutate_reply(self, text, token):
         text = (text or "").strip()
@@ -151,21 +193,25 @@ class OpenAIResponder:
             return text
         version = self._get_behavior_version(token)
         style = self._token_style(token, version)
-        if len(text) < style["min_len"] and random.random() < 0.5:
+        rng = self._mutation_rng(token, version)
+        if len(text) < style["min_len"] and rng.random() < 0.5:
             return text
-        if random.random() < style["reaction_only_rate"]:
-            return random.choice(style["reactions"])
-        if random.random() < style["shorten_rate"] or len(text) > style["max_len"]:
-            target = min(style["max_len"], max(style["min_len"], int(len(text) * random.uniform(0.55, 0.9))))
+        if rng.random() < style["reaction_only_rate"]:
+            return rng.choice(style["reactions"])
+        if rng.random() < style["shorten_rate"] or len(text) > style["max_len"]:
+            target = min(style["max_len"], max(style["min_len"], int(len(text) * rng.uniform(0.55, 0.9))))
             text = self._truncate_text(text, target)
-        if random.random() < style["pause_rate"]:
+        interrupt_rate = style.get("interrupt_rate", style.get("pause_rate", 0.0))
+        if rng.random() < interrupt_rate:
             text = self._inject_pause(text)
-        if random.random() < style["typo_rate"]:
-            text = self._add_typo(text)
-        if random.random() < style["lowercase_rate"]:
+        if rng.random() < style["typo_rate"]:
+            text = self._add_typo(text, rng)
+        if rng.random() < style["lowercase_rate"]:
             text = self._maybe_lowercase(text)
-        if random.random() < style["emoji_rate"]:
-            text = self._append_emoji(text, style["emojis"])
+        if rng.random() < style["cutoff_rate"]:
+            return self._hard_cutoff(text, rng)
+        if rng.random() < style["emoji_rate"]:
+            text = self._append_emoji(text, style["emojis"], rng)
         return text
 
     def generate_reply(self, user_message, author_name=None, token=None):

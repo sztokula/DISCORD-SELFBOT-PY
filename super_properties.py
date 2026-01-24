@@ -3,12 +3,12 @@ import json
 import re
 import threading
 import time
-import random
 from collections import OrderedDict
 from datetime import datetime
 import httpx
 from client_identity import USER_AGENT, CHROME_VERSION
 from proxy_utils import httpx_client
+from behavior_version import CURRENT_BEHAVIOR_VERSION, get_behavior_version, seeded_rng
 
 DEFAULT_BUILD_NUMBER = 300000
 DEFAULT_LOCALE = "en-US"
@@ -160,11 +160,16 @@ def get_client_build_number(db):
     stored = db.get_setting("client_build_number", "")
     return _safe_int(stored, DEFAULT_BUILD_NUMBER)
 
-def _generate_device_profile(db, proxy=None, user_agent=None):
+def _pick_os_version(db, token):
+    version = get_behavior_version(db, token, CURRENT_BEHAVIOR_VERSION)
+    rng = seeded_rng(token or "anon", version, "device_profile")
+    return rng.choice(["10", "11"])
+
+def _generate_device_profile(db, proxy=None, user_agent=None, token=None):
     ua = user_agent or DEFAULT_UA
     build_number = get_client_build_number(db)
     locale = resolve_locale_for_proxy(db, proxy=proxy, user_agent=ua)
-    os_version = random.choice(["10", "11"])
+    os_version = _pick_os_version(db, token)
     return {
         "os": "Windows",
         "browser": "Chrome",
@@ -179,13 +184,13 @@ def _generate_device_profile(db, proxy=None, user_agent=None):
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
-def _normalize_device_profile(profile, db, proxy=None, user_agent=None):
+def _normalize_device_profile(profile, db, proxy=None, user_agent=None, token=None):
     changed = False
     if not isinstance(profile, dict):
         profile = {}
         changed = True
     if not profile:
-        return _generate_device_profile(db, proxy=proxy, user_agent=user_agent), True
+        return _generate_device_profile(db, proxy=proxy, user_agent=user_agent, token=token), True
     ua = profile.get("browser_user_agent") or user_agent or DEFAULT_UA
     if user_agent and ua != profile.get("browser_user_agent"):
         ua = user_agent
@@ -203,7 +208,9 @@ def _normalize_device_profile(profile, db, proxy=None, user_agent=None):
     if not profile.get("browser_version"):
         profile["browser_version"] = _extract_chrome_version(ua)
         changed = True
-    profile.setdefault("os_version", "10")
+    if not profile.get("os_version"):
+        profile["os_version"] = _pick_os_version(db, token)
+        changed = True
     profile.setdefault("release_channel", DEFAULT_RELEASE_CHANNEL)
     if "client_event_source" not in profile:
         profile["client_event_source"] = None
@@ -221,7 +228,7 @@ def get_or_create_token_fingerprint(db, token, proxy=None, user_agent=None):
         profile = db.get_token_fingerprint(token)
     except Exception:
         profile = None
-    normalized, changed = _normalize_device_profile(profile, db, proxy=proxy, user_agent=user_agent)
+    normalized, changed = _normalize_device_profile(profile, db, proxy=proxy, user_agent=user_agent, token=token)
     if changed:
         try:
             db.set_token_fingerprint(token, normalized)

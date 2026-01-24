@@ -23,7 +23,9 @@ class TokenManager:
     def _is_proxy_required(self):
         try:
             value = self.db.get_setting("require_proxy", None)
-        except Exception:
+        except Exception as exc:
+            if self.log:
+                self.log(f"[Token] Failed to read require_proxy setting: {type(exc).__name__}")
             return False
         if value in (None, ""):
             return False
@@ -137,8 +139,9 @@ class TokenManager:
                         cooldown_seconds=60,
                         details="missing_username_discriminator",
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    if self.log:
+                        self.log(f"[Token] Failed to record silent_fail: {type(exc).__name__}")
                 return "retry", "Invalid response"
             if self.telemetry:
                 self.telemetry.send_science(
@@ -152,8 +155,9 @@ class TokenManager:
         if response.status_code in (401, 403):
             try:
                 self.db.clear_token_cookies(token)
-            except Exception:
-                pass
+            except Exception as exc:
+                if self.log:
+                    self.log(f"[Cookies] Failed to clear cookies after auth error: {type(exc).__name__}")
             if response.status_code == 403:
                 try:
                     self.db.record_token_violation(
@@ -163,8 +167,9 @@ class TokenManager:
                         status="limited",
                         cooldown_seconds=300,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    if self.log:
+                        self.log(f"[Token] Failed to record forbidden: {type(exc).__name__}")
                 return "retry", "Forbidden"
             return "unauthorized", "Invalid Token"
         if response.status_code == 429:
@@ -177,8 +182,9 @@ class TokenManager:
                     status="cooldowned",
                     cooldown_seconds=retry_after,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                if self.log:
+                    self.log(f"[Token] Failed to record rate_limited: {type(exc).__name__}")
             return "retry", f"HTTP {response.status_code}"
         return "retry", f"HTTP {response.status_code}"
 

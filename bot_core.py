@@ -65,23 +65,9 @@ class BotCore:
         self.gateway_log_queue = multiprocessing.Queue()
         self.gateway_event_queue = multiprocessing.Queue()
         self.gateway_stop_event = multiprocessing.Event()
-        self.gateway_process = multiprocessing.Process(
-            target=run_gateway_process,
-            args=(
-                self.db.db_name,
-                self.gateway_log_queue,
-                self.gateway_event_queue,
-                self.gateway_shared_status,
-                self.gateway_stop_event,
-            ),
-            daemon=True,
-        )
-        self.gateway_process.start()
-        self.gateway_manager = GatewayProcessProxy(
-            self.gateway_shared_status,
-            self.gateway_stop_event,
-            self.gateway_process,
-        )
+        self.gateway_process = None
+        self.gateway_manager = None
+        self._gateway_lock = threading.Lock()
 
         self.worker = DiscordWorker(
             self.db,
@@ -124,6 +110,39 @@ class BotCore:
     def _log(self, message):
         if self.log:
             self.log(message)
+
+    def start_gateway(self):
+        with self._gateway_lock:
+            if self.gateway_process and self.gateway_process.is_alive():
+                return False
+            self.gateway_stop_event = multiprocessing.Event()
+            try:
+                self.gateway_shared_status.clear()
+            except Exception:
+                pass
+            self.gateway_process = multiprocessing.Process(
+                target=run_gateway_process,
+                args=(
+                    self.db.db_name,
+                    self.gateway_log_queue,
+                    self.gateway_event_queue,
+                    self.gateway_shared_status,
+                    self.gateway_stop_event,
+                ),
+                daemon=True,
+            )
+            self.gateway_process.start()
+            self.gateway_manager = GatewayProcessProxy(
+                self.gateway_shared_status,
+                self.gateway_stop_event,
+                self.gateway_process,
+            )
+            try:
+                self.worker.gateway_manager = self.gateway_manager
+            except Exception:
+                pass
+        self._log("[Gateway] Starting on demand.")
+        return True
 
     def _launch_mission_with_params(self, params):
         if not params:
@@ -235,6 +254,8 @@ class BotCore:
                 self.gateway_manager.stop()
             except Exception:
                 pass
+        self.gateway_manager = None
+        self.gateway_process = None
 
     def shutdown(self):
         self.stop_all()

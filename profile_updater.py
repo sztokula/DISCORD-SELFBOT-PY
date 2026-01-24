@@ -1,6 +1,5 @@
 import base64
 import hashlib
-import random
 import time
 from datetime import datetime
 from pathlib import Path
@@ -42,7 +41,9 @@ class ProfileUpdater:
     def _get_setting_float(self, key, default, min_value=None, max_value=None):
         try:
             raw = self.db.get_setting(key, "")
-        except Exception:
+        except Exception as exc:
+            if self.log:
+                self.log(f"[Profile] Failed to read setting {key}: {type(exc).__name__}")
             raw = ""
         if raw in (None, ""):
             value = default
@@ -62,7 +63,9 @@ class ProfileUpdater:
             return None
         try:
             return datetime.fromisoformat(str(value))
-        except Exception:
+        except Exception as exc:
+            if self.log:
+                self.log(f"[Profile] Failed to parse timestamp: {type(exc).__name__}")
             return None
 
     def _seconds_since(self, value):
@@ -213,8 +216,11 @@ class ProfileUpdater:
                                 avatar_updated_at=now_str if changed_avatar else None,
                                 updated_at=now_str,
                             )
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            if self.log:
+                                self.log(
+                                    f"[Profile] Account {acc_id}: failed to save profile history ({type(exc).__name__})."
+                                )
                         self.log(f"[Profile] Account {acc_id}: profile updated.")
                         self.log(f"[Info] Profile updated for account {acc_id}.")
                         if self.telemetry:
@@ -233,8 +239,11 @@ class ProfileUpdater:
                     if response.status_code == 401:
                         try:
                             self.db.clear_token_cookies(token)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            if self.log:
+                                self.log(
+                                    f"[Profile] Account {acc_id}: failed to clear cookies ({type(exc).__name__})."
+                                )
                         self.log(f"[Profile] Account {acc_id}: unauthorized, removing.")
                         self.db.update_account_status(acc_id, "Banned/Dead")
                         self.db.remove_account(acc_id)
@@ -243,8 +252,11 @@ class ProfileUpdater:
                     if response.status_code == 403:
                         try:
                             self.db.clear_token_cookies(token)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            if self.log:
+                                self.log(
+                                    f"[Profile] Account {acc_id}: failed to clear cookies ({type(exc).__name__})."
+                                )
                         self.log(f"[Profile] Account {acc_id}: forbidden (403).")
                         updated = True
                         break
@@ -258,5 +270,5 @@ class ProfileUpdater:
             scale = base_rng.uniform(0.8, 1.2)
             adj_min = max(0.0, step_delay_min * scale)
             adj_max = max(adj_min, step_delay_max * scale)
-            delay = random.uniform(adj_min, adj_max) if adj_max > adj_min else adj_min
+            delay = base_rng.uniform(adj_min, adj_max) if adj_max > adj_min else adj_min
             time.sleep(max(0.0, delay))
