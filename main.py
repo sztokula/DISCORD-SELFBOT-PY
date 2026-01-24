@@ -6,6 +6,7 @@ import queue
 import re
 import threading
 import random
+import multiprocessing
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -24,7 +25,7 @@ from metrics import HealthMetrics
 from profile_updater import ProfileUpdater
 from build_number_updater import BuildNumberUpdater, CriticalBuildError
 from telemetry import TelemetryClient
-from gateway import GatewayManager
+from gateway import run_gateway_process
 from openai_responder import OpenAIResponder
 from auto_reply import AutoReplyService
 from proxy_utils import normalize_proxy, httpx_client
@@ -39,6 +40,40 @@ APP_VERSION = "1.0"
 DEFAULT_VERSION_ENDPOINT = "https://updates.example.com/massdm/version.json"
 TRUSTED_UPDATE_HOSTS = {"updates.example.com"}
 DEFAULT_PROXY_CHECK_ENDPOINT = "https://discord.com/api/v9/experiments"
+
+class GatewayProcessProxy:
+    def __init__(self, shared_status, stop_event, process):
+        self._shared_status = shared_status
+        self._stop_event = stop_event
+        self._process = process
+
+    def is_connected(self, token):
+        if not token:
+            return False
+        try:
+            return bool(self._shared_status.get(token))
+        except Exception:
+            return False
+
+    def stop(self):
+        if self._stop_event:
+            try:
+                self._stop_event.set()
+            except Exception:
+                pass
+        proc = self._process
+        if not proc:
+            return
+        try:
+            if proc.is_alive():
+                proc.join(timeout=2.0)
+        except Exception:
+            pass
+        try:
+            if proc.is_alive():
+                proc.terminate()
+        except Exception:
+            pass
 
 class MassDMApp(ctk.CTk):
     def __init__(self):
@@ -64,7 +99,28 @@ class MassDMApp(ctk.CTk):
         self.metrics = HealthMetrics()
         self.captcha_solver = CaptchaSolver(self.db, self.add_log)
         self.telemetry = TelemetryClient(self.db, self.add_log)
-        self.gateway_manager = GatewayManager(self.db, self.add_log)
+        self.gateway_mp_manager = multiprocessing.Manager()
+        self.gateway_shared_status = self.gateway_mp_manager.dict()
+        self.gateway_log_queue = multiprocessing.Queue()
+        self.gateway_event_queue = multiprocessing.Queue()
+        self.gateway_stop_event = multiprocessing.Event()
+        self.gateway_process = multiprocessing.Process(
+            target=run_gateway_process,
+            args=(
+                self.db.db_name,
+                self.gateway_log_queue,
+                self.gateway_event_queue,
+                self.gateway_shared_status,
+                self.gateway_stop_event,
+            ),
+            daemon=True,
+        )
+        self.gateway_process.start()
+        self.gateway_manager = GatewayProcessProxy(
+            self.gateway_shared_status,
+            self.gateway_stop_event,
+            self.gateway_process,
+        )
         self.worker = DiscordWorker(
             self.db,
             self.add_log,
@@ -80,12 +136,7 @@ class MassDMApp(ctk.CTk):
             self.openai_responder,
             self.add_log,
         )
-        self.gateway_manager.on_event = self._handle_gateway_event
-        self._gateway_thread = threading.Thread(
-            target=self._run_gateway_manager,
-            daemon=True,
-        )
-        self._gateway_thread.start()
+        self.after(100, self._process_gateway_queues)
         self.scraper = DiscordScraper(self.db, self.add_log, self.metrics, self.telemetry)
         self.status_changer = StatusChanger(self.db, self.add_log, self.metrics, self.telemetry)
         self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver, self.metrics, self.telemetry) # Initialization
@@ -311,12 +362,22 @@ class MassDMApp(ctk.CTk):
         }
         self.protocol("WM_DELETE_WINDOW", self._on_main_close)
 
-    def _run_gateway_manager(self):
-        import asyncio
-        try:
-            asyncio.run(self.gateway_manager.run())
-        except Exception as exc:
-            self.add_log(f"[Gateway] Manager error: {exc}")
+    def _process_gateway_queues(self):
+        if hasattr(self, "gateway_log_queue"):
+            while True:
+                try:
+                    message = self.gateway_log_queue.get_nowait()
+                except queue.Empty:
+                    break
+                self.add_log(message)
+        if hasattr(self, "gateway_event_queue"):
+            while True:
+                try:
+                    token, payload = self.gateway_event_queue.get_nowait()
+                except queue.Empty:
+                    break
+                self._handle_gateway_event(token, payload)
+        self.after(100, self._process_gateway_queues)
 
     def _on_main_close(self):
         try:
@@ -325,6 +386,16 @@ class MassDMApp(ctk.CTk):
                 self.db.set_setting("main_window_geometry", geometry)
         except Exception:
             pass
+        if hasattr(self, "gateway_manager") and self.gateway_manager:
+            try:
+                self.gateway_manager.stop()
+            except Exception:
+                pass
+        if hasattr(self, "gateway_mp_manager") and self.gateway_mp_manager:
+            try:
+                self.gateway_mp_manager.shutdown()
+            except Exception:
+                pass
         self.destroy()
 
     def _handle_gateway_event(self, token, payload):
@@ -2985,6 +3056,11 @@ class MassDMApp(ctk.CTk):
         self.scraper.stop()
         self.status_changer.stop()
         self.joiner.stop()
+        if hasattr(self, "gateway_manager") and self.gateway_manager:
+            try:
+                self.gateway_manager.stop()
+            except Exception:
+                pass
         self.add_log("[Debug] Worker stop requested.")
         self.add_log("[Debug] Scraper stop requested.")
         self.add_log("[Debug] Status changer stop requested.")

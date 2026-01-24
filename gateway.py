@@ -1,8 +1,10 @@
 import asyncio
+import ctypes
 import json
 import time
 import threading
 import random
+import sys
 from typing import Callable, Dict, Optional
 
 try:
@@ -15,6 +17,7 @@ else:
 
 GATEWAY_URL = "wss://gateway.discord.gg/?v=9&encoding=json"
 from proxy_utils import normalize_proxy
+from database import DatabaseManager
 
 
 class GatewayClient:
@@ -45,6 +48,8 @@ class GatewayClient:
         self.on_event = on_event
         self._stop = asyncio.Event()
         self._last_sequence = None
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread = None
 
     def stop(self):
         self._stop.set()
@@ -85,13 +90,14 @@ class GatewayClient:
         interval = self._extract_heartbeat_interval(hello_payload)
         await ws.send(json.dumps(self._identify_payload()))
         self._log("[Gateway] IDENTIFY sent")
-        heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws, interval))
+        loop = asyncio.get_running_loop()
+        self._start_heartbeat_thread(ws, interval, loop)
         try:
             await self._recv_loop(ws)
         finally:
-            heartbeat_task.cancel()
+            self._stop_heartbeat_thread()
             try:
-                await heartbeat_task
+                await asyncio.sleep(0)
             except Exception:
                 pass
             if self.on_disconnect:
@@ -163,16 +169,50 @@ class GatewayClient:
             elif op == 11:  # HEARTBEAT ACK
                 continue
 
-    async def _heartbeat_loop(self, ws, interval):
+    def _start_heartbeat_thread(self, ws, interval, loop):
+        self._heartbeat_stop.set()
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            return
+        self._heartbeat_stop.clear()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop_thread,
+            args=(ws, interval, loop),
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat_thread(self):
+        self._heartbeat_stop.set()
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            try:
+                self._heartbeat_thread.join(timeout=2.0)
+            except Exception:
+                pass
+
+    def _heartbeat_loop_thread(self, ws, interval, loop):
+        self._bump_thread_priority()
         jitter = random.uniform(0.0, max(0.1, interval))
-        await asyncio.sleep(jitter)
-        while not self._stop.is_set():
-            await self._send_heartbeat(ws)
-            await asyncio.sleep(interval)
+        time.sleep(jitter)
+        while not self._stop.is_set() and not self._heartbeat_stop.is_set():
+            try:
+                asyncio.run_coroutine_threadsafe(self._send_heartbeat(ws), loop)
+            except Exception:
+                return
+            time.sleep(interval)
 
     async def _send_heartbeat(self, ws):
         try:
             await ws.send(json.dumps({"op": 1, "d": self._last_sequence}))
+        except Exception:
+            return
+
+    def _bump_thread_priority(self):
+        if sys.platform != "win32":
+            return
+        try:
+            THREAD_PRIORITY_HIGHEST = 2
+            handle = ctypes.windll.kernel32.GetCurrentThread()
+            ctypes.windll.kernel32.SetThreadPriority(handle, THREAD_PRIORITY_HIGHEST)
         except Exception:
             return
 
@@ -188,10 +228,17 @@ class GatewayClient:
 
 
 class GatewayManager:
-    def __init__(self, db_manager, log: Optional[Callable[[str], None]] = None, on_event=None):
+    def __init__(
+        self,
+        db_manager,
+        log: Optional[Callable[[str], None]] = None,
+        on_event=None,
+        shared_status: Optional[Dict[str, int]] = None,
+    ):
         self.db = db_manager
         self.log = log
         self.on_event = on_event
+        self.shared_status = shared_status
         self._clients = []
         self._tasks = []
         self._stop = asyncio.Event()
@@ -293,6 +340,11 @@ class GatewayManager:
             return
         with self._active_lock:
             self._active_tokens.add(token)
+        if self.shared_status is not None:
+            try:
+                self.shared_status[token] = 1
+            except Exception:
+                pass
         suffix = str(token)[-6:]
         self._log(f"[Info] Gateway connected (token=...{suffix}).")
 
@@ -302,6 +354,11 @@ class GatewayManager:
         with self._active_lock:
             if token in self._active_tokens:
                 self._active_tokens.remove(token)
+        if self.shared_status is not None:
+            try:
+                self.shared_status.pop(token, None)
+            except Exception:
+                pass
         suffix = str(token)[-6:]
         self._log(f"[Warn] Gateway disconnected (token=...{suffix}).")
 
@@ -315,3 +372,35 @@ class GatewayManager:
 async def run_gateway_for_active_tokens(db_manager, log=None):
     manager = GatewayManager(db_manager, log=log)
     await manager.run()
+
+
+def run_gateway_process(db_name, log_queue=None, event_queue=None, shared_status=None, stop_event=None):
+    def _log(msg):
+        if log_queue:
+            try:
+                log_queue.put(msg)
+            except Exception:
+                pass
+
+    def _on_event(token, payload):
+        if event_queue:
+            try:
+                event_queue.put((token, payload))
+            except Exception:
+                pass
+
+    db = DatabaseManager(db_name=db_name, log_callback=None)
+    manager = GatewayManager(
+        db,
+        log=_log,
+        on_event=_on_event if event_queue else None,
+        shared_status=shared_status,
+    )
+
+    if stop_event:
+        def _stopper():
+            stop_event.wait()
+            manager.stop()
+        threading.Thread(target=_stopper, daemon=True).start()
+
+    asyncio.run(manager.run())
