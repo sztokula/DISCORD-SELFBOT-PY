@@ -161,7 +161,7 @@ class DiscordScraper:
                     self.log(f"[Scraper] Found unique: {len(unique_ids)}...")
                     self._sleep_with_stop(1) # Delay to avoid rate limit.
             
-            # Zapis do bazy
+            # Save to database
             if unique_ids:
                 self.db.add_targets(list(unique_ids), "discord")
                 added_any = True

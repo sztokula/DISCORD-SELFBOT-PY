@@ -126,9 +126,21 @@ class ProfileUpdater:
                         updated = True
                         break
                     if response.status_code == 401:
+                        try:
+                            self.db.clear_token_cookies(token)
+                        except Exception:
+                            pass
                         self.log(f"[Profile] Account {acc_id}: unauthorized, removing.")
                         self.db.update_account_status(acc_id, "Banned/Dead")
                         self.db.remove_account(acc_id)
+                        updated = True
+                        break
+                    if response.status_code == 403:
+                        try:
+                            self.db.clear_token_cookies(token)
+                        except Exception:
+                            pass
+                        self.log(f"[Profile] Account {acc_id}: forbidden (403).")
                         updated = True
                         break
                     if response.status_code == 429:

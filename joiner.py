@@ -2,6 +2,7 @@ import httpx
 from proxy_utils import httpx_client
 import time
 import random
+import uuid
 from super_properties import set_super_properties_header
 from delay_utils import gaussian_delay
 from client_identity import USER_AGENT
@@ -60,6 +61,11 @@ class DiscordJoiner:
         return None
 
     def _handle_unauthorized(self, client, account_id, current_token, refreshed):
+        if current_token:
+            try:
+                self.db.clear_token_cookies(current_token)
+            except Exception:
+                pass
         if refreshed:
             self.log(f"[Joiner] Token for account {account_id} is still invalid. Deactivating account.")
             if account_id is not None:
@@ -85,6 +91,8 @@ class DiscordJoiner:
         auto_accept_rules=True,
         auto_onboarding=True,
         role_whitelist=None,
+        auto_verify_button=False,
+        verification_channel_id=None,
     ):
         """invite_code: only the invite slug, e.g. 'cool-server' from discord.gg/cool-server"""
         # Strip invite code in case a full link is pasted.
@@ -137,9 +145,16 @@ class DiscordJoiner:
                             auto_accept_rules,
                             auto_onboarding,
                             role_whitelist,
+                            auto_verify_button,
+                            verification_channel_id,
                         )
                         return True, "Success", guild_id
                     if response.status_code in {400, 403}:
+                        if response.status_code == 403:
+                            try:
+                                self.db.clear_token_cookies(token)
+                            except Exception:
+                                pass
                         captcha_payload, err, user_agent = self._solve_captcha_payload(response)
                         if captcha_payload:
                             if user_agent:
@@ -168,6 +183,8 @@ class DiscordJoiner:
                                     auto_accept_rules,
                                     auto_onboarding,
                                     role_whitelist,
+                                    auto_verify_button,
+                                    verification_channel_id,
                                 )
                                 return True, "Success (captcha)", guild_id
                             return False, f"Post-captcha error: {retry_resp.status_code}", None
@@ -194,6 +211,8 @@ class DiscordJoiner:
         auto_accept_rules=True,
         auto_onboarding=True,
         role_whitelist=None,
+        auto_verify_button=False,
+        verification_channel_id=None,
         allowed_account_ids=None,
     ):
         self.is_running = True
@@ -244,6 +263,8 @@ class DiscordJoiner:
                 auto_accept_rules=auto_accept_rules,
                 auto_onboarding=auto_onboarding,
                 role_whitelist=role_whitelist,
+                auto_verify_button=auto_verify_button,
+                verification_channel_id=verification_channel_id,
             )
             
             if success:
@@ -295,6 +316,8 @@ class DiscordJoiner:
                 auto_accept_rules=auto_accept_rules,
                 auto_onboarding=auto_onboarding,
                 role_whitelist=role_whitelist,
+                auto_verify_button=auto_verify_button,
+                verification_channel_id=verification_channel_id,
             )
             if success:
                 self.db.increment_join_counter(acc_id)
@@ -559,6 +582,114 @@ class DiscordJoiner:
             return False
         return False
 
+    def _fetch_channel_messages(self, client, channel_id, limit=50):
+        if not channel_id:
+            return None
+        url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
+        for attempt in range(self.max_retries + 1):
+            try:
+                start = time.monotonic()
+                resp = client.get(url, params={"limit": int(limit)})
+                self._record_request(time.monotonic() - start, resp)
+            except Exception:
+                return None
+            if resp.status_code == 200:
+                try:
+                    return resp.json()
+                except Exception:
+                    return None
+            if resp.status_code == 429:
+                retry_after = self._get_retry_after(resp)
+                wait_time = retry_after * (self.backoff_factor ** attempt)
+                self._sleep_with_stop(wait_time)
+                continue
+            if resp.status_code in {401, 403, 404}:
+                self.log(f"[Joiner] Cannot read verification channel ({resp.status_code}).")
+                return None
+            return None
+        return None
+
+    def _extract_button_custom_id(self, message):
+        if not isinstance(message, dict):
+            return None
+        components = message.get("components") or []
+        for row in components:
+            if isinstance(row, dict):
+                row_components = row.get("components") or []
+            elif isinstance(row, list):
+                row_components = row
+            else:
+                continue
+            for comp in row_components:
+                if not isinstance(comp, dict):
+                    continue
+                if comp.get("type") != 2:
+                    continue
+                if comp.get("disabled"):
+                    continue
+                custom_id = comp.get("custom_id")
+                if custom_id:
+                    return custom_id
+        return None
+
+    def _find_verification_button(self, messages):
+        if not isinstance(messages, list):
+            return None, None
+        for msg in messages:
+            custom_id = self._extract_button_custom_id(msg)
+            if custom_id:
+                return msg, custom_id
+        return None, None
+
+    def _send_button_interaction(self, client, guild_id, channel_id, message_id, application_id, custom_id):
+        if not (channel_id and message_id and application_id and custom_id):
+            return False
+        payload = {
+            "type": 3,
+            "channel_id": channel_id,
+            "message_id": message_id,
+            "application_id": application_id,
+            "data": {
+                "component_type": 2,
+                "custom_id": custom_id,
+            },
+            "session_id": uuid.uuid4().hex,
+        }
+        if guild_id:
+            payload["guild_id"] = guild_id
+        return self._submit_with_captcha(
+            client,
+            "POST",
+            "https://discord.com/api/v9/interactions",
+            payload,
+        )
+
+    def _click_verification_button(self, client, guild_id, channel_id):
+        messages = self._fetch_channel_messages(client, channel_id, limit=50)
+        msg, custom_id = self._find_verification_button(messages)
+        if not msg or not custom_id:
+            self.log("[Joiner] Verification button not found in channel.")
+            return False
+        message_id = msg.get("id")
+        application_id = msg.get("application_id")
+        if not application_id:
+            author = msg.get("author") or {}
+            application_id = author.get("id")
+        if not (message_id and application_id):
+            self.log("[Joiner] Verification message missing IDs.")
+            return False
+        ok = self._send_button_interaction(
+            client,
+            guild_id,
+            channel_id,
+            message_id,
+            application_id,
+            custom_id,
+        )
+        if ok:
+            self.log("[Joiner] Verification button clicked.")
+        return ok
+
     def _build_rule_response(self, field):
         choices = field.get("choices")
         if not choices:
@@ -670,7 +801,16 @@ class DiscordJoiner:
             self.log(f"[Joiner] Completed onboarding for guild {guild_id}.")
         return ok
 
-    def _handle_post_join(self, client, guild_id, auto_accept_rules, auto_onboarding, role_whitelist=None):
+    def _handle_post_join(
+        self,
+        client,
+        guild_id,
+        auto_accept_rules,
+        auto_onboarding,
+        role_whitelist=None,
+        auto_verify_button=False,
+        verification_channel_id=None,
+    ):
         if not guild_id:
             self.log("[Joiner] Guild id missing; skipping rules/onboarding.")
             return
@@ -678,3 +818,5 @@ class DiscordJoiner:
             self._accept_rules(client, guild_id)
         if auto_onboarding:
             self._complete_onboarding(client, guild_id, role_whitelist)
+        if auto_verify_button and verification_channel_id:
+            self._click_verification_button(client, guild_id, verification_channel_id)

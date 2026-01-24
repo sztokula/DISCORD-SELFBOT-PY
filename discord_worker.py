@@ -65,6 +65,12 @@ class DiscordWorker:
             return False
         return True
 
+    def _clear_token_cookies(self, token):
+        try:
+            self.db.clear_token_cookies(token)
+        except Exception:
+            pass
+
     def _record_request(self, duration, response=None):
         if not self.metrics:
             return
@@ -156,6 +162,8 @@ class DiscordWorker:
                 self._wait_for_rate_limit(resp, attempt)
                 continue
             if resp.status_code in {400, 403}:
+                if resp.status_code == 403:
+                    self._clear_token_cookies(client.headers.get("Authorization"))
                 captcha_payload, err, user_agent = self._solve_captcha_payload(resp)
                 if not captcha_payload:
                     self.log(f"[Captcha] Friend request blocked for {user_id}: {err}")
@@ -265,6 +273,8 @@ class DiscordWorker:
         return None
 
     def _handle_unauthorized(self, client, account_id, current_token, refreshed):
+        if current_token:
+            self._clear_token_cookies(current_token)
         if refreshed:
             self.log(f"[Auth] Token for account {account_id} is still invalid. Deactivating account.")
             if account_id is not None:
@@ -432,6 +442,8 @@ class DiscordWorker:
                         self._wait_for_rate_limit(response, attempt)
                         continue
                     if response.status_code in {400, 403}:
+                        if response.status_code == 403:
+                            self._clear_token_cookies(token)
                         captcha_payload, err, user_agent = self._solve_captcha_payload(response)
                         if not captcha_payload:
                             return False, err
@@ -509,6 +521,8 @@ class DiscordWorker:
                         self._wait_for_rate_limit(msg_resp, attempt)
                         continue
                     if msg_resp.status_code in {400, 403}:
+                        if msg_resp.status_code == 403:
+                            self._clear_token_cookies(token)
                         captcha_payload, err, user_agent = self._solve_captcha_payload(msg_resp)
                         if not captcha_payload:
                             return False, err
@@ -547,7 +561,110 @@ class DiscordWorker:
                         return False, f"Captcha error: {retry_resp.status_code}"
                     return False, f"Code: {msg_resp.status_code}"
 
-                return False, "Rate Limit (message)"
+        return False, "Rate Limit (message)"
+
+    def send_channel_message(
+        self,
+        account_id,
+        token,
+        channel_id,
+        message_content,
+        proxy=None,
+    ):
+        if not message_content:
+            return False, "Empty message"
+        if len(message_content) > 2000:
+            message_content = message_content[:2000]
+        user_agent = USER_AGENT
+        headers = {
+            "Authorization": token,
+            "Content-Type": "application/json",
+            "User-Agent": user_agent,
+        }
+        set_super_properties_header(headers, self.db)
+        with httpx_client(
+            proxy,
+            headers=headers,
+            timeout=httpx.Timeout(10.0),
+            cookie_db=self.db,
+            cookie_token=lambda: token,
+        ) as client:
+            try:
+                if not self._ensure_gateway_connected(token):
+                    return False, "Gateway offline"
+                refreshed = False
+                msg_url = f"https://discord.com/api/v9/channels/{channel_id}/messages"
+                typing_url = f"https://discord.com/api/v9/channels/{channel_id}/typing"
+
+                try:
+                    start = time.monotonic()
+                    typing_resp = client.post(typing_url)
+                    self._record_request(time.monotonic() - start, typing_resp)
+                except Exception:
+                    pass
+                self._sleep_with_stop(self._typing_delay_seconds(message_content))
+
+                for attempt in range(self.max_retries + 1):
+                    if not self._ensure_gateway_connected(token):
+                        return False, "Gateway offline"
+                    start = time.monotonic()
+                    msg_resp = client.post(msg_url, json={"content": message_content})
+                    self._record_request(time.monotonic() - start, msg_resp)
+                    if msg_resp.status_code == 401:
+                        token, refreshed = self._handle_unauthorized(
+                            client, account_id, token, refreshed
+                        )
+                        if token:
+                            continue
+                        return False, "Unauthorized (token)"
+                    if msg_resp.status_code == 200:
+                        try:
+                            msg_id = msg_resp.json().get("id")
+                        except Exception:
+                            msg_id = None
+                        if msg_id:
+                            self._post_ack(client, channel_id=channel_id, message_id=msg_id)
+                        return True, "Success"
+                    if msg_resp.status_code == 429:
+                        self._wait_for_rate_limit(msg_resp, attempt)
+                        continue
+                    if msg_resp.status_code in {400, 403}:
+                        if msg_resp.status_code == 403:
+                            self._clear_token_cookies(token)
+                        captcha_payload, err, user_agent = self._solve_captcha_payload(msg_resp)
+                        if not captcha_payload:
+                            return False, err
+                        if user_agent:
+                            client.headers["User-Agent"] = user_agent
+                            set_super_properties_header(client.headers, self.db, user_agent=user_agent)
+                        payload = {"content": message_content}
+                        payload.update(captcha_payload)
+                        start = time.monotonic()
+                        retry_resp = client.post(msg_url, json=payload)
+                        self._record_request(time.monotonic() - start, retry_resp)
+                        if retry_resp.status_code == 401:
+                            token, refreshed = self._handle_unauthorized(
+                                client, account_id, token, refreshed
+                            )
+                            if token:
+                                continue
+                            return False, "Unauthorized (token)"
+                        if retry_resp.status_code == 200:
+                            try:
+                                msg_id = retry_resp.json().get("id")
+                            except Exception:
+                                msg_id = None
+                            if msg_id:
+                                self._post_ack(client, channel_id=channel_id, message_id=msg_id)
+                            return True, "Success (captcha)"
+                        if retry_resp.status_code == 429:
+                            self._wait_for_rate_limit(retry_resp, attempt)
+                            continue
+                        return False, f"Post-captcha error: {retry_resp.status_code}"
+                    return False, f"Message error: {msg_resp.status_code}"
+            except Exception as exc:
+                return False, str(exc)
+        return False, "Rate Limit (message)"
             except Exception as e:
                 return False, str(e)
 

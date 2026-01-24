@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 import threading
+import random
 from typing import Callable, Dict, Optional
 
 try:
@@ -24,8 +25,10 @@ class GatewayClient:
         heartbeat_interval_seconds: float = 40.0,
         properties: Optional[Dict[str, str]] = None,
         proxy: Optional[str] = None,
+        intents: int = 4096,
         on_connect: Optional[Callable[[str], None]] = None,
         on_disconnect: Optional[Callable[[str], None]] = None,
+        on_event: Optional[Callable[[str, Dict], None]] = None,
     ):
         self.token = token
         self.log = log
@@ -36,8 +39,10 @@ class GatewayClient:
             "device": "",
         }
         self.proxy = proxy
+        self.intents = intents
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
+        self.on_event = on_event
         self._stop = asyncio.Event()
         self._last_sequence = None
 
@@ -75,9 +80,15 @@ class GatewayClient:
         interval = self._extract_heartbeat_interval(hello_payload)
         await ws.send(json.dumps(self._identify_payload()))
         self._log("[Gateway] IDENTIFY sent")
+        heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws, interval))
         try:
-            await self._heartbeat_loop(ws, interval)
+            await self._recv_loop(ws)
         finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except Exception:
+                pass
             if self.on_disconnect:
                 try:
                     self.on_disconnect(self.token)
@@ -109,20 +120,14 @@ class GatewayClient:
                     "afk": False,
                 },
                 "compress": False,
-                "intents": 0,
+                "intents": int(self.intents) if self.intents is not None else 0,
             },
         }
 
-    async def _heartbeat_loop(self, ws, interval):
-        next_heartbeat = time.monotonic() + interval
+    async def _recv_loop(self, ws):
         while not self._stop.is_set():
-            timeout = max(0.0, next_heartbeat - time.monotonic())
             try:
-                message = await asyncio.wait_for(ws.recv(), timeout=timeout)
-            except asyncio.TimeoutError:
-                await ws.send(json.dumps({"op": 1, "d": self._last_sequence}))
-                next_heartbeat = time.monotonic() + interval
-                continue
+                message = await ws.recv()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -131,13 +136,35 @@ class GatewayClient:
             payload = self._safe_json(message)
             if not payload:
                 continue
+            if self.on_event:
+                try:
+                    self.on_event(self.token, payload)
+                except Exception:
+                    pass
             if "s" in payload:
                 self._last_sequence = payload["s"]
             op = payload.get("op")
-            if op == 7:  # RECONNECT
+            if op == 1:  # HEARTBEAT request
+                await self._send_heartbeat(ws)
+            elif op == 7:  # RECONNECT
                 break
-            if op == 9:  # INVALID_SESSION
+            elif op == 9:  # INVALID_SESSION
                 break
+            elif op == 11:  # HEARTBEAT ACK
+                continue
+
+    async def _heartbeat_loop(self, ws, interval):
+        jitter = random.uniform(0.0, max(0.1, interval))
+        await asyncio.sleep(jitter)
+        while not self._stop.is_set():
+            await self._send_heartbeat(ws)
+            await asyncio.sleep(interval)
+
+    async def _send_heartbeat(self, ws):
+        try:
+            await ws.send(json.dumps({"op": 1, "d": self._last_sequence}))
+        except Exception:
+            return
 
     def _safe_json(self, message):
         try:
@@ -151,9 +178,10 @@ class GatewayClient:
 
 
 class GatewayManager:
-    def __init__(self, db_manager, log: Optional[Callable[[str], None]] = None):
+    def __init__(self, db_manager, log: Optional[Callable[[str], None]] = None, on_event=None):
         self.db = db_manager
         self.log = log
+        self.on_event = on_event
         self._clients = []
         self._tasks = []
         self._stop = asyncio.Event()
@@ -177,6 +205,7 @@ class GatewayManager:
                 proxy=proxy,
                 on_connect=self._mark_connected,
                 on_disconnect=self._mark_disconnected,
+                on_event=self.on_event,
             )
             self._clients.append(client)
             self._tasks.append(asyncio.create_task(client.run()))

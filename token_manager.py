@@ -107,7 +107,13 @@ class TokenManager:
                     proxy=proxy,
                 )
             return "ok", f"{username}#{discriminator}"
-        if response.status_code == 401:
+        if response.status_code in (401, 403):
+            try:
+                self.db.clear_token_cookies(token)
+            except Exception:
+                pass
+            if response.status_code == 403:
+                return "retry", "Forbidden"
             return "unauthorized", "Invalid Token"
         return "retry", f"HTTP {response.status_code}"
 

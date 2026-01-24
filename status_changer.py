@@ -69,6 +69,11 @@ class StatusChanger:
         return None
 
     def _handle_unauthorized(self, client, account_id, current_token, refreshed):
+        if current_token:
+            try:
+                self.db.clear_token_cookies(current_token)
+            except Exception:
+                pass
         if refreshed:
             self.log(f"[Status] Token for account {account_id} is still invalid. Deactivating account.")
             if account_id is not None:
@@ -135,6 +140,13 @@ class StatusChanger:
                                 proxy=proxy,
                             )
                         return True
+                    if response.status_code == 403:
+                        try:
+                            self.db.clear_token_cookies(token)
+                        except Exception:
+                            pass
+                        self.log(f"[Status] Forbidden (403) for token {token[:10]}...")
+                        return False
                     if response.status_code == 429:
                         self.log("[Status] Rate limit. Applying backoff...")
                         self._wait_for_rate_limit(response, attempt, running_check=lambda: self.is_running or self.auto_running)

@@ -24,6 +24,7 @@ class DatabaseManager:
             "anti-captcha_api_key",
             "scrape_token",
             "proxy_pool",
+            "openai_api_key",
         }
         self.warmup_days = 7
         self.warmup_min_limit = 1
@@ -492,9 +493,15 @@ class DatabaseManager:
         with self.write_lock:
             conn = self.get_connection()
             cursor = conn.cursor()
+            cursor.execute("SELECT proxy, token FROM accounts WHERE id = ?", (account_id,))
+            row = cursor.fetchone()
+            prev_proxy = row[0] if row else None
+            token_value = self._decrypt_token(row[1]) if row and row[1] else None
             cursor.execute("UPDATE accounts SET proxy = ? WHERE id = ?", (proxy, account_id))
             conn.commit()
             conn.close()
+        if prev_proxy != proxy and token_value:
+            self.clear_token_cookies(token_value)
 
     def get_accounts_missing_proxy(self, platform=None):
         conn = self.get_connection()
@@ -736,6 +743,11 @@ class DatabaseManager:
                 )
             conn.commit()
             conn.close()
+
+    def clear_token_cookies(self, token):
+        if not token:
+            return
+        self.set_token_cookies(token, None)
 
     def get_proxy_pool(self):
         raw = self.get_setting("proxy_pool", "")

@@ -3,6 +3,7 @@ import json
 import queue
 import re
 import threading
+import random
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -22,6 +23,8 @@ from profile_updater import ProfileUpdater
 from build_number_updater import BuildNumberUpdater
 from telemetry import TelemetryClient
 from gateway import GatewayManager
+from openai_responder import OpenAIResponder
+from auto_reply import AutoReplyService
 from proxy_utils import normalize_proxy, httpx_client
 from super_properties import set_super_properties_header
 from client_identity import USER_AGENT
@@ -56,11 +59,6 @@ class MassDMApp(ctk.CTk):
         self.captcha_solver = CaptchaSolver(self.db, self.add_log)
         self.telemetry = TelemetryClient(self.db, self.add_log)
         self.gateway_manager = GatewayManager(self.db, self.add_log)
-        self._gateway_thread = threading.Thread(
-            target=self._run_gateway_manager,
-            daemon=True,
-        )
-        self._gateway_thread.start()
         self.worker = DiscordWorker(
             self.db,
             self.add_log,
@@ -69,9 +67,22 @@ class MassDMApp(ctk.CTk):
             self.telemetry,
             self.gateway_manager,
         )
+        self.openai_responder = OpenAIResponder(self.db, self.add_log)
+        self.auto_reply_service = AutoReplyService(
+            self.db,
+            self.worker,
+            self.openai_responder,
+            self.add_log,
+        )
+        self.gateway_manager.on_event = self._handle_gateway_event
+        self._gateway_thread = threading.Thread(
+            target=self._run_gateway_manager,
+            daemon=True,
+        )
+        self._gateway_thread.start()
         self.scraper = DiscordScraper(self.db, self.add_log, self.metrics, self.telemetry)
         self.status_changer = StatusChanger(self.db, self.add_log, self.metrics, self.telemetry)
-        self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver, self.metrics, self.telemetry) # Inicjalizacja
+        self.joiner = DiscordJoiner(self.db, self.add_log, self.captcha_solver, self.metrics, self.telemetry) # Initialization
         self.token_manager = TokenManager(self.db, self.add_log, self.metrics, self.telemetry)
         self.profile_updater = ProfileUpdater(self.db, self.add_log, self.metrics, self.telemetry)
         self.build_number_updater = BuildNumberUpdater(self.db, self.add_log)
@@ -210,6 +221,15 @@ class MassDMApp(ctk.CTk):
         self.dry_run_var = ctk.BooleanVar(value=self._get_setting_bool("dry_run", False))
         self.auto_accept_rules_var = ctk.BooleanVar(value=self._get_setting_bool("auto_accept_rules", True))
         self.auto_onboarding_var = ctk.BooleanVar(value=self._get_setting_bool("auto_onboarding", True))
+        self.auto_verify_button_var = ctk.BooleanVar(
+            value=self._get_setting_bool("auto_verify_button", False)
+        )
+        self.auto_reply_var = ctk.BooleanVar(
+            value=self._get_setting_bool("auto_reply_enabled", False)
+        )
+        self.auto_reply_once_var = ctk.BooleanVar(
+            value=self._get_setting_bool("auto_reply_once_per_conversation", False)
+        )
         self.require_proxy_var = ctk.BooleanVar(value=self._get_setting_bool("require_proxy", True))
         self.profile_change_name_var = ctk.BooleanVar(value=self._get_setting_bool("profile_change_name", False))
         self.profile_change_avatar_var = ctk.BooleanVar(value=self._get_setting_bool("profile_change_avatar", False))
@@ -296,6 +316,13 @@ class MassDMApp(ctk.CTk):
             asyncio.run(self.gateway_manager.run())
         except Exception as exc:
             self.add_log(f"[Gateway] Manager error: {exc}")
+
+    def _handle_gateway_event(self, token, payload):
+        if hasattr(self, "auto_reply_service") and self.auto_reply_service:
+            try:
+                self.auto_reply_service.handle_event(token, payload)
+            except Exception:
+                pass
 
     def add_log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -810,11 +837,15 @@ class MassDMApp(ctk.CTk):
         range_value = None
         if hasattr(self, "scrape_range_input") and self.scrape_range_input.winfo_exists():
             range_value = self.scrape_range_input.get().strip()
+        accounts_limit = None
+        if hasattr(self, "scrape_accounts_limit_input") and self.scrape_accounts_limit_input.winfo_exists():
+            accounts_limit = self.scrape_accounts_limit_input.get().strip()
 
         self.db.set_setting("scrape_token", token or None)
         self.db.set_setting("scrape_channel_id", channel_id or None)
         self.db.set_setting("scrape_guild_id", guild_id or None)
         self.db.set_setting("scrape_range", range_value or None)
+        self.db.set_setting("scrape_accounts_limit", accounts_limit or None)
         scrape_proxy = None
         if hasattr(self, "scrape_proxy_input") and self.scrape_proxy_input.winfo_exists():
             scrape_proxy = self.scrape_proxy_input.get().strip()
@@ -851,6 +882,10 @@ class MassDMApp(ctk.CTk):
         if range_value:
             self.scrape_range_input.delete(0, "end")
             self.scrape_range_input.insert(0, range_value)
+        accounts_limit = self.db.get_setting("scrape_accounts_limit", "").strip()
+        if hasattr(self, "scrape_accounts_limit_input") and self.scrape_accounts_limit_input.winfo_exists():
+            self.scrape_accounts_limit_input.delete(0, "end")
+            self.scrape_accounts_limit_input.insert(0, accounts_limit or "3")
         scrape_proxy = self.db.get_setting("scrape_proxy", "").strip()
         if scrape_proxy:
             normalized = self._normalize_proxy(scrape_proxy)
@@ -1232,7 +1267,7 @@ class MassDMApp(ctk.CTk):
                 self.show_notification(err, level="error")
                 return
             self.db.set_setting("version_endpoint", endpoint)
-            self.add_log("[Settings] Zapisano endpoint wersji.")
+            self.add_log("[Settings] Saved version endpoint.")
         else:
             self._set_input_valid(endpoint_entry, True)
             self.db.set_setting("version_endpoint", None)
@@ -1254,8 +1289,8 @@ class MassDMApp(ctk.CTk):
             self.show_notification(err, level="error")
             return
         self.db.set_setting("version_endpoint", endpoint)
-        self.add_log("[Updater] Sprawdzanie najnowszej wersji...")
-        self.show_notification("Sprawdzanie aktualizacji...", level="info")
+        self.add_log("[Updater] Checking latest version...")
+        self.show_notification("Checking for updates...", level="info")
         threading.Thread(
             target=self._check_for_updates_worker,
             args=(endpoint,),
@@ -1358,20 +1393,20 @@ class MassDMApp(ctk.CTk):
 
     def update_build_number_now(self):
         self.add_log("[Build] Manual refresh requested.")
-        self.show_notification("Odświeżanie build number...", level="info")
+        self.show_notification("Refreshing build number...", level="info")
 
         def worker():
             try:
                 updated = self.build_number_updater.run_once(force=True)
             except Exception as exc:
                 self.add_log(f"[Build] Manual refresh failed: {exc}")
-                self.after(0, lambda: self.show_notification("Błąd odświeżania build number.", level="error"))
+                self.after(0, lambda: self.show_notification("Build number refresh failed.", level="error"))
                 return
             self.after(0, self.refresh_build_number_display)
             if updated:
                 self.after(0, lambda: self.show_notification("Zaktualizowano build number.", level="success"))
             else:
-                self.after(0, lambda: self.show_notification("Brak nowych danych build number.", level="info"))
+                self.after(0, lambda: self.show_notification("No new build number data.", level="info"))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2030,6 +2065,14 @@ class MassDMApp(ctk.CTk):
     def save_joiner_settings(self):
         if not hasattr(self, "onboarding_role_whitelist_input"):
             return
+        if hasattr(self, "auto_verify_button_var"):
+            self._set_setting_bool("auto_verify_button", self.auto_verify_button_var.get())
+        if hasattr(self, "verification_channel_input"):
+            raw_channel = self.verification_channel_input.get().strip()
+            if not raw_channel:
+                self.db.set_setting("verification_channel_id", None)
+            elif self.is_valid_channel_id(raw_channel, self.verification_channel_input):
+                self.db.set_setting("verification_channel_id", raw_channel)
         raw = self.onboarding_role_whitelist_input.get("1.0", "end").strip()
         if not raw:
             self.db.set_setting("onboarding_role_whitelist", None)
@@ -2046,6 +2089,11 @@ class MassDMApp(ctk.CTk):
     def _load_joiner_settings(self):
         if not hasattr(self, "onboarding_role_whitelist_input"):
             return
+        if hasattr(self, "verification_channel_input"):
+            stored_channel = self.db.get_setting("verification_channel_id", "")
+            self.verification_channel_input.delete(0, "end")
+            if stored_channel:
+                self.verification_channel_input.insert(0, stored_channel)
         stored = self.db.get_setting("onboarding_role_whitelist", "")
         self.onboarding_role_whitelist_input.delete("1.0", "end")
         if stored:
@@ -2117,6 +2165,21 @@ class MassDMApp(ctk.CTk):
             auto_onboarding = self.auto_onboarding_var.get()
         else:
             auto_onboarding = self._get_setting_bool("auto_onboarding", True)
+        if hasattr(self, "auto_verify_button_var"):
+            auto_verify_button = self.auto_verify_button_var.get()
+        else:
+            auto_verify_button = self._get_setting_bool("auto_verify_button", False)
+        if hasattr(self, "verification_channel_input") and self.verification_channel_input.winfo_exists():
+            verification_channel_id = self.verification_channel_input.get().strip()
+        else:
+            verification_channel_id = self.db.get_setting("verification_channel_id", "").strip()
+        if auto_verify_button:
+            if not verification_channel_id:
+                self.log_warning("[Joiner] Verification channel ID missing; skipping auto-verify.")
+                auto_verify_button = False
+            elif not self.is_valid_channel_id(verification_channel_id, self.verification_channel_input if hasattr(self, "verification_channel_input") else None):
+                self.log_warning("[Joiner] Invalid verification channel ID; skipping auto-verify.")
+                auto_verify_button = False
         if hasattr(self, "onboarding_role_whitelist_input") and self.onboarding_role_whitelist_input.winfo_exists():
             raw_roles = self.onboarding_role_whitelist_input.get("1.0", "end")
         else:
@@ -2167,6 +2230,8 @@ class MassDMApp(ctk.CTk):
                 auto_accept_rules,
                 auto_onboarding,
                 role_whitelist,
+                auto_verify_button,
+                verification_channel_id if auto_verify_button else None,
                 allowed_ids,
             )
         thread = threading.Thread(target=_join_with_proxy_check)
@@ -2183,9 +2248,6 @@ class MassDMApp(ctk.CTk):
             token = token_entry.get().strip()
         else:
             token = self.db.get_setting("scrape_token", "").strip()
-        if not token:
-            self.log_error("Open settings and enter a scraping token.")
-            return False
         channel_entry = (
             self.scrape_channel_input
             if hasattr(self, "scrape_channel_input") and self.scrape_channel_input.winfo_exists()
@@ -2247,9 +2309,6 @@ class MassDMApp(ctk.CTk):
             token = token_entry.get().strip()
         else:
             token = self.db.get_setting("scrape_token", "").strip()
-        if not token:
-            self.log_error("Open settings and enter a scraping token.")
-            return False
         guild_entry = (
             self.scrape_guild_input
             if hasattr(self, "scrape_guild_input") and self.scrape_guild_input.winfo_exists()
@@ -2268,8 +2327,21 @@ class MassDMApp(ctk.CTk):
             range_value = range_entry.get().strip()
         else:
             range_value = self.db.get_setting("scrape_range", "").strip()
-        if not self.validate_token_format(token, token_entry):
-            return False
+        accounts_limit_raw = (
+            self.scrape_accounts_limit_input.get().strip()
+            if hasattr(self, "scrape_accounts_limit_input") and self.scrape_accounts_limit_input.winfo_exists()
+            else self.db.get_setting("scrape_accounts_limit", "").strip()
+        )
+        try:
+            accounts_limit = int(accounts_limit_raw) if accounts_limit_raw else 0
+        except ValueError:
+            accounts_limit = 0
+        if accounts_limit <= 0:
+            if not token:
+                self.log_error("Open settings and enter a scraping token.")
+                return False
+            if not self.validate_token_format(token, token_entry):
+                return False
         if not self.is_valid_guild_id(guild_id, guild_entry):
             return False
         limit = self._get_scrape_limit(range_value, 1000, range_entry)
@@ -2283,8 +2355,45 @@ class MassDMApp(ctk.CTk):
         else:
             scrape_proxy = self.db.get_setting("scrape_proxy", "").strip()
         def _scrape_with_proxy_check():
+            if accounts_limit > 0:
+                accounts = self.db.get_active_accounts("discord")
+                if not accounts:
+                    self.log_error("No active accounts available for guild scraping.")
+                    if on_complete:
+                        on_complete(False)
+                    return
+                valid_accounts = self._ensure_account_proxies(accounts, "guild scrape")
+                if not valid_accounts:
+                    if on_complete:
+                        on_complete(False)
+                    return
+                use_count = min(accounts_limit, len(valid_accounts))
+                chosen_accounts = random.sample(valid_accounts, k=use_count)
+                self.add_log(f"[Scraper] Using {use_count} account(s) for guild scrape.")
+                any_added = False
+                for acc in chosen_accounts:
+                    acc_id, _, acc_token, acc_proxy, *_rest = acc
+                    def _done(success):
+                        nonlocal any_added
+                        if success:
+                            any_added = True
+                    self.scraper.scrape_guild_members(
+                        acc_token,
+                        guild_id,
+                        limit,
+                        _done,
+                        proxy=acc_proxy or None,
+                    )
+                if on_complete:
+                    on_complete(any_added)
+                return
             normalized_proxy = self._ensure_scraper_proxy(scrape_proxy, "guild scrape")
             if normalized_proxy is None:
+                if on_complete:
+                    on_complete(False)
+                return
+            if not token:
+                self.log_error("Open settings and enter a scraping token.")
                 if on_complete:
                     on_complete(False)
                 return
@@ -2677,7 +2786,7 @@ class MassDMApp(ctk.CTk):
             self.export_banned_tokens_plaintext_var.get(),
         )
         status = "enabled" if self.export_banned_tokens_plaintext_var.get() else "disabled"
-        self.add_log(f"[Settings] Eksport banlisty plaintext: {status}.")
+        self.add_log(f"[Settings] Banlist plaintext export: {status}.")
 
     def apply_module_states(self):
         dm_enabled = self.module_vars["dm"].get()
@@ -2753,6 +2862,7 @@ class MassDMApp(ctk.CTk):
             self.save_scrape_settings()
             self.save_invite_settings()
             self.save_captcha_settings()
+            self.save_ai_settings()
             self.save_version_settings()
             self.save_status_settings()
             self.save_profile_settings()
@@ -2761,6 +2871,7 @@ class MassDMApp(ctk.CTk):
             self._set_setting_bool("dry_run", self.dry_run_var.get())
             self._set_setting_bool("auto_accept_rules", self.auto_accept_rules_var.get())
             self._set_setting_bool("auto_onboarding", self.auto_onboarding_var.get())
+            self._set_setting_bool("auto_verify_button", self.auto_verify_button_var.get())
             self._set_setting_bool("require_proxy", self.require_proxy_var.get())
             self.settings_window.destroy()
             self.refresh_workflow_status()
@@ -2921,7 +3032,7 @@ class MassDMApp(ctk.CTk):
         self.db.set_setting("account_min_interval", str(account_interval))
         self.db.set_setting("target_min_interval", str(target_interval))
         self._set_setting_bool("delay_units_hours", True)
-        self.add_log("[Settings] Zapisano ustawienia delay.")
+        self.add_log("[Settings] Saved delay settings.")
 
     def _build_settings_sections(self, parent):
         # 1. CONFIGURATION SECTION (Accounts + Proxy)
@@ -2948,11 +3059,11 @@ class MassDMApp(ctk.CTk):
         )
         self.require_proxy_toggle.grid(row=5, column=0, padx=10, pady=(0, 5), sticky="w")
         ctk.CTkLabel(self.acc_frame, text="DM daily limit").grid(row=6, column=0, padx=10, pady=(0, 2), sticky="w")
-        self.dm_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="DM daily limit (np. 15)", width=350)
+        self.dm_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="DM daily limit (e.g. 15)", width=350)
         self.dm_limit_input.grid(row=7, column=0, padx=10, pady=5)
         self.dm_limit_input.insert(0, "15")
         ctk.CTkLabel(self.acc_frame, text="Join daily limit").grid(row=8, column=0, padx=10, pady=(0, 2), sticky="w")
-        self.join_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Join daily limit (np. 5)", width=350)
+        self.join_limit_input = ctk.CTkEntry(self.acc_frame, placeholder_text="Join daily limit (e.g. 5)", width=350)
         self.join_limit_input.grid(row=9, column=0, padx=10, pady=5)
         self.join_limit_input.insert(0, "5")
         self.add_acc_btn = ctk.CTkButton(self.acc_frame, text="Add Account", command=self.add_account)
@@ -3291,18 +3402,40 @@ class MassDMApp(ctk.CTk):
             variable=self.auto_onboarding_var,
         )
         self.joiner_onboarding_toggle.grid(row=4, column=0, padx=10, pady=(0, 10), sticky="w")
+        self.joiner_verify_toggle = ctk.CTkCheckBox(
+            self.joiner_frame,
+            text="Auto click verification button",
+            variable=self.auto_verify_button_var,
+        )
+        self.joiner_verify_toggle.grid(row=5, column=0, padx=10, pady=(0, 5), sticky="w")
+        ctk.CTkLabel(
+            self.joiner_frame,
+            text="Verification channel ID",
+        ).grid(row=6, column=0, padx=10, pady=(0, 2), sticky="w")
+        self.verification_channel_input = ctk.CTkEntry(
+            self.joiner_frame,
+            placeholder_text="Channel ID",
+            width=220,
+        )
+        self.verification_channel_input.grid(row=7, column=0, padx=10, pady=(0, 10), sticky="w")
+        self.joiner_verify_hint = ctk.CTkLabel(
+            self.joiner_frame,
+            text="Open Settings → Joiner, enable “Auto click verification button,” and set the verification channel ID.",
+            text_color="#8a8a8a",
+        )
+        self.joiner_verify_hint.grid(row=8, column=0, padx=10, pady=(0, 10), sticky="w")
         ctk.CTkLabel(
             self.joiner_frame,
             text="Role whitelist (IDs, one per line)",
-        ).grid(row=5, column=0, padx=10, pady=(0, 2), sticky="w")
+        ).grid(row=9, column=0, padx=10, pady=(0, 2), sticky="w")
         self.onboarding_role_whitelist_input = ctk.CTkTextbox(self.joiner_frame, height=80, width=350)
-        self.onboarding_role_whitelist_input.grid(row=6, column=0, padx=10, pady=5, sticky="w")
+        self.onboarding_role_whitelist_input.grid(row=10, column=0, padx=10, pady=5, sticky="w")
         self.joiner_onboarding_hint = ctk.CTkLabel(
             self.joiner_frame,
             text="If set, onboarding selects matching roles, otherwise falls back to first options.",
             text_color="#8a8a8a",
         )
-        self.joiner_onboarding_hint.grid(row=7, column=0, padx=10, pady=(0, 10), sticky="w")
+        self.joiner_onboarding_hint.grid(row=11, column=0, padx=10, pady=(0, 10), sticky="w")
         self._load_invite_settings()
         self._load_joiner_settings()
 
@@ -3333,6 +3466,45 @@ class MassDMApp(ctk.CTk):
         self.captcha_test_btn = ctk.CTkButton(self.captcha_frame, text="Test API", fg_color="#16a085", command=self.test_captcha_settings)
         self.captcha_test_btn.grid(row=3, column=1, padx=10, pady=5)
         self._load_captcha_settings()
+
+        self.ai_frame = ctk.CTkFrame(parent)
+        self.ai_frame.pack(fill="x", pady=10)
+        ctk.CTkLabel(self.ai_frame, text="AI Auto-Reply (OpenAI)", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=3, pady=10)
+        self.auto_reply_toggle = ctk.CTkCheckBox(
+            self.ai_frame,
+            text="Enable auto-reply for incoming DMs",
+            variable=self.auto_reply_var,
+        )
+        self.auto_reply_toggle.grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 8), sticky="w")
+        self.auto_reply_once_toggle = ctk.CTkCheckBox(
+            self.ai_frame,
+            text="Reply only once per conversation",
+            variable=self.auto_reply_once_var,
+        )
+        self.auto_reply_once_toggle.grid(row=2, column=0, columnspan=2, padx=10, pady=(0, 8), sticky="w")
+        ctk.CTkLabel(self.ai_frame, text="API Key").grid(row=3, column=0, padx=10, pady=(0, 2), sticky="w")
+        ctk.CTkLabel(self.ai_frame, text="Model").grid(row=3, column=1, padx=10, pady=(0, 2), sticky="w")
+        self.openai_key_input = ctk.CTkEntry(self.ai_frame, placeholder_text="OpenAI API Key", width=350)
+        self.openai_key_input.grid(row=4, column=0, padx=10, pady=5, sticky="w")
+        self.openai_model_input = ctk.CTkEntry(self.ai_frame, placeholder_text="Model (e.g. gpt-4o-mini)", width=220)
+        self.openai_model_input.grid(row=4, column=1, padx=10, pady=5, sticky="w")
+        self.openai_save_btn = ctk.CTkButton(
+            self.ai_frame,
+            text="Save AI Settings",
+            fg_color="#3498db",
+            command=self.save_ai_settings,
+        )
+        self.openai_save_btn.grid(row=4, column=2, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.ai_frame, text="System prompt").grid(row=5, column=0, padx=10, pady=(0, 2), sticky="w")
+        self.openai_prompt_input = ctk.CTkTextbox(self.ai_frame, height=90, width=600)
+        self.openai_prompt_input.grid(row=6, column=0, columnspan=2, padx=10, pady=5, sticky="w")
+        self.ai_hint_label = ctk.CTkLabel(
+            self.ai_frame,
+            text="Requires an OpenAI API key. Example model: gpt-4o-mini.",
+            text_color="#8a8a8a",
+        )
+        self.ai_hint_label.grid(row=7, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="w")
+        self._load_ai_settings()
 
         self.version_frame = ctk.CTkFrame(parent)
         self.version_frame.pack(fill="x", pady=10)
@@ -3477,6 +3649,11 @@ class MassDMApp(ctk.CTk):
             command=self.start_guild_scraping,
         )
         self.scrape_guild_btn.grid(row=6, column=2, padx=10, pady=5, sticky="w")
+        ctk.CTkLabel(self.scrape_frame, text="Scrape accounts limit (guild)").grid(
+            row=7, column=0, padx=10, pady=(0, 2), sticky="w"
+        )
+        self.scrape_accounts_limit_input = ctk.CTkEntry(self.scrape_frame, placeholder_text="e.g. 3", width=140)
+        self.scrape_accounts_limit_input.grid(row=8, column=0, padx=10, pady=5, sticky="w")
         self._load_scrape_settings()
         self.refresh_accounts_overview()
         self.refresh_targets_overview()
@@ -3521,12 +3698,45 @@ class MassDMApp(ctk.CTk):
         api_key = self.captcha_key_input.get().strip()
         self.db.set_setting("captcha_provider", provider)
         self.db.set_setting(f"{provider}_api_key", api_key)
-        self.add_log(f"[Captcha] Zapisano ustawienia dla {provider}.")
+        self.add_log(f"[Captcha] Saved settings for {provider}.")
+
+    def save_ai_settings(self):
+        if not hasattr(self, "openai_key_input"):
+            return
+        api_key = self.openai_key_input.get().strip()
+        model = self.openai_model_input.get().strip() if hasattr(self, "openai_model_input") else ""
+        prompt = ""
+        if hasattr(self, "openai_prompt_input"):
+            prompt = self.openai_prompt_input.get("1.0", "end").strip()
+        self._set_setting_bool("auto_reply_enabled", self.auto_reply_var.get())
+        self._set_setting_bool("auto_reply_once_per_conversation", self.auto_reply_once_var.get())
+        self.db.set_setting("openai_api_key", api_key or None)
+        self.db.set_setting("openai_model", model or None)
+        self.db.set_setting("openai_system_prompt", prompt or None)
+        self.add_log("[AI] Saved auto-reply settings.")
+
+    def _load_ai_settings(self):
+        if not hasattr(self, "openai_key_input"):
+            return
+        stored_key = self.db.get_setting("openai_api_key", "")
+        self.openai_key_input.delete(0, "end")
+        if stored_key:
+            self.openai_key_input.insert(0, stored_key)
+        if hasattr(self, "openai_model_input"):
+            stored_model = self.db.get_setting("openai_model", "")
+            self.openai_model_input.delete(0, "end")
+            if stored_model:
+                self.openai_model_input.insert(0, stored_model)
+        if hasattr(self, "openai_prompt_input"):
+            stored_prompt = self.db.get_setting("openai_system_prompt", "")
+            self.openai_prompt_input.delete("1.0", "end")
+            if stored_prompt:
+                self.openai_prompt_input.insert("1.0", stored_prompt)
 
     def test_captcha_settings(self):
         provider = self._get_captcha_provider_key()
         api_key = self.captcha_key_input.get().strip()
-        self.add_log(f"[Captcha] Sprawdzam API {provider}...")
+        self.add_log(f"[Captcha] Checking API {provider}...")
         thread = threading.Thread(target=self._run_captcha_check, args=(provider, api_key))
         thread.daemon = True
         thread.start()
